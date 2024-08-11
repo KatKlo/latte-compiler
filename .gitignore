@@ -1,0 +1,8 @@
+.stack-work/
+*~
+.idea/
+out/
+stack.yaml
+stack.yaml.lock
+latte-compiler.cabal
+latte-compiler.iml
