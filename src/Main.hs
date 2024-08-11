@@ -33,7 +33,7 @@ checkStatic prog = do
       hPrint stderr err
       exitFailure
     Right warnings -> do
-      printFirstErrLine True
+--      printFirstErrLine True
       mapM_ (hPrint stderr) warnings
 
 genCode :: Program -> FilePath -> IO FilePath
