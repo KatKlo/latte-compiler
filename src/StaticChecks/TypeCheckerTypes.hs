@@ -117,23 +117,8 @@ showPos :: BNFC'Position -> String
 showPos (Just (line, column)) = concat [" at line ", show line, ", column ", show column]
 showPos _ = ""
 
--- TypeChecker monad and classes
+-- TypeChecker monad
 type TypeCheckerM' a = WriterT [SemanticException] (StateT Store (ReaderT Env (ExceptT SemanticError IO))) a
-
-class DefsAdder a where
-  addDefs :: a -> TypeCheckerM' ()
-
-class Checker a where
-  check :: a -> TypeCheckerM' ()
-
-class EnvGetter a where
-  getEnv :: a -> TypeCheckerM' Env
-
-class TypeGetterChecker a where
-  getCheckType :: a -> TypeCheckerM' (Maybe Type)
-
-class TypeGetter a where
-  getType :: a -> TypeCheckerM' Type
 
 -- environment helpers
 
