@@ -9,7 +9,7 @@
 
 -- | Pretty-printer for PrintLatte.
 
-module PrintLatte where
+module Grammar.PrintLatte where
 
 import Prelude
   ( ($), (.)
@@ -20,7 +20,7 @@ import Prelude
   , all, elem, foldr, id, map, null, replicate, shows, span
   )
 import Data.Char ( Char, isSpace )
-import qualified AbsLatte
+import qualified Grammar.AbsLatte as AbsLatte
 
 -- | The top-level printing method.
 

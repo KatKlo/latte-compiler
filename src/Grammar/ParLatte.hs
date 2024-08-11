@@ -6,7 +6,7 @@
 {-# OPTIONS_GHC -fno-warn-incomplete-patterns -fno-warn-overlapping-patterns #-}
 {-# LANGUAGE PatternSynonyms #-}
 
-module ParLatte
+module Grammar.ParLatte
   ( happyError
   , myLexer
   , pProgram
@@ -14,8 +14,8 @@ module ParLatte
 
 import Prelude
 
-import qualified AbsLatte
-import LexLatte
+import qualified Grammar.AbsLatte as AbsLatte
+import Grammar.LexLatte
 import qualified Data.Array as Happy_Data_Array
 import qualified Data.Bits as Bits
 import qualified GHC.Exts as Happy_GHC_Exts
