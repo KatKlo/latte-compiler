@@ -4,7 +4,7 @@
 PROGRAM="./latc_x86_64"
 
 # List of directories containing input files
-GOOD_INPUT_DIRS=("lattests/good" "lattests/extensions/arrays1")
+GOOD_INPUT_DIRS=("lattests/good" "lattests/extensions/arrays1" "lattests/extensions/objects1" "lattests/extensions/struct")
 BAD_INPUT_DIRS=("lattests/bad")
 
 # Test function

@@ -23,13 +23,18 @@ typeCheck prog = runExceptT (runReaderT (evalStateT (execWriterT (checkProgram p
 
 checkProgram :: Program -> TypeCheckerM' ()
 checkProgram (Prog _ topDefs) = do
-  mapM_ saveFnDefinition topDefs
+  mapM_ saveTopDef topDefs
+--  store <- get
+--  _ <- liftIO (print store)
+  resolveClassesInheritances
+--  store <- get
+--  _ <- liftIO (print store)
   checkMainDeclaration
   mapM_ checkTopDef topDefs
 
 checkMainDeclaration :: TypeCheckerM' ()
 checkMainDeclaration = do
-  mainType <- getFunctionType (Ident "main") BNFC'NoPosition
+  mainType <- getFunctionType (Ident "") (Ident "main") BNFC'NoPosition
   case mainType of
     Fun _ (Int _) [] -> pure ()
     Fun pos _ _ -> throwError $ WrongMainDeclaration pos
@@ -37,19 +42,47 @@ checkMainDeclaration = do
 
 -- 'TopDef' level checks
 
-saveFnDefinition :: TopDef -> TypeCheckerM' ()
-saveFnDefinition (FnDef pos t ident args _) = do
+saveTopDef :: TopDef -> TypeCheckerM' ()
+saveTopDef (FnTopDef _ fnDef) = saveFnDef fnDef
+saveTopDef (ClassTopDef _ classDef) = saveClassDef classDef
+
+saveFnDef :: FnDef -> TypeCheckerM' ()
+saveFnDef (FunDef pos t ident args _) = do
   let mappedArgs = map mapArg args
   addFunction pos ident (Fun pos t mappedArgs)
 
+saveClassDef :: ClassDef -> TypeCheckerM' ()
+saveClassDef cls = do
+  let cIdent = className cls
+  _ <- addClassParent cIdent (classParent cls)
+  newEnv <- addCurrClass cIdent
+  local (const newEnv) (mapM_ saveCStmt (classBody cls))
+
+saveCStmt :: CStmt -> TypeCheckerM' ()
+saveCStmt (MethodDef _ fnDef) = saveFnDef fnDef
+saveCStmt (FieldDef pos fieldType fieldIdent) = addField pos fieldIdent fieldType
+
 checkTopDef :: TopDef -> TypeCheckerM' ()
-checkTopDef (FnDef pos t ident args (SBlock _ stmts)) = do
+checkTopDef (FnTopDef _ fnDef) = checkFnDef fnDef
+checkTopDef (ClassTopDef _ classDef) = checkClassDef classDef
+
+checkFnDef :: FnDef -> TypeCheckerM' ()
+checkFnDef (FunDef pos t ident args (SBlock _ stmts)) = do
   newEnv <- addExpRetTypeToLocalScope t
   blockEnv <- resolveDefArgs args newEnv
   evaluated <- local (const blockEnv) (checkStmtsListType stmts)
   case evaluated of
     Just _ -> pure ()
     Nothing -> getCompType tVoid t (NoReturnStmt ident pos) >> pure ()
+
+checkClassDef :: ClassDef -> TypeCheckerM' ()
+checkClassDef cls = do
+  newEnv <- prepareClassChecks (className cls)
+  local (const newEnv) (mapM_ checkCStmt (classBody cls))
+
+checkCStmt :: CStmt -> TypeCheckerM' ()
+checkCStmt (MethodDef _ fnDef) = checkFnDef fnDef
+checkCStmt _ = pure ()
 
 -- 'Block' level checks
 
@@ -140,11 +173,10 @@ checkStmtType (While pos expr stmt) = do
     (_, _) -> pure Nothing
 
 -- what if arr.length = 0 ???
-checkStmtType (ForEach pos t elIdent arrIdent stmt) = do
-  (Arr _ arrType) <- getVariableType arrIdent BNFC'NoPosition
+checkStmtType (ForEach pos t elIdent arrExpr stmt) = do
+  (Arr _ arrType) <-getExprType arrExpr
   _ <- getCompType arrType t ( WrongVariableType (hasPosition t))
-  loopEnv <- addVariableToLocalScope pos elIdent t
-  local (const loopEnv) (checkBlockType (SBlock (hasPosition stmt) [stmt]))
+  checkBlockType (SBlock (hasPosition stmt) [(Decl pos t [NoInit pos elIdent]), stmt])
 
 checkStmtType (SExp _ expr) = getExprType expr >> pure Nothing
 
@@ -153,16 +185,24 @@ checkStmtType (SExp _ expr) = getExprType expr >> pure Nothing
 getExprType :: Expr -> TypeCheckerM' Type
 
 getExprType (EVar pos ident) = getVariableType ident pos
+getExprType (ESelf pos) = do
+  cIdent <- getCurrClass
+  pure $ Class pos cIdent -- todo: what if not in class?
 
 getExprType (ELitInt pos num) = if isInt num then pure tInt else throwError $ IntOutOfBound num pos
 getExprType (ELitTrue _) = pure tBool
 getExprType (ELitFalse _) = pure tBool
 getExprType (EString _ _) = pure tStr
+getExprType (EClassNull pos ident) = pure $ Ref pos (Class pos ident)
+getExprType (EArrNull pos t) = pure $ Ref pos t
+getExprType (ENull pos) = pure $ Ref pos tVoid
 
 -- maybe check if expr > 0 ???
 getExprType (ENewArr pos t expr) = do
   _ <- getCheckExprType expr tInt
   pure $ Arr pos t
+getExprType (ENewObj _ t) = pure t
+
 getExprType (EArrGet pos arrExpr idExpr) = do
   _ <- getCheckExprType idExpr tInt
   arrType <- getExprType arrExpr
@@ -173,7 +213,14 @@ getExprType (EFieldGet pos itemExpr ident) = do
   itemType <- getExprType itemExpr
   case (itemType, ident) of
     (Arr _ _, Ident "length") -> pure tInt
-    _ -> throwError $ PropertyNotExisting ident pos
+    (Class _ cIdent, _) -> getFieldType cIdent ident pos
+    _ -> throwError $ UnknownSemanticError pos
+
+getExprType (EMethod pos itemExpr methodIdent exprs) = do
+  (Class _ classIdent) <- getExprType itemExpr
+  Fun _ t args <- getFunctionType classIdent methodIdent pos
+  resolveAppArgs pos args exprs
+  pure t
 
 getExprType (Neg pos (ELitInt _ num)) = getExprType (ELitInt pos (- num))
 getExprType (Neg _ expr) = getCheckExprType expr tInt <&> fromJust
@@ -210,7 +257,7 @@ getExprType (ERel _ e1 op e2) = do
 
 getExprType (EApp pos ident exprs) = do
   when (ident == Ident "main") (throwError $ WrongMainCall pos)
-  Fun _ t args <- getFunctionType ident pos
+  Fun _ t args <- getFunctionType (Ident "") ident pos
   resolveAppArgs pos args exprs
   pure t
 
@@ -226,13 +273,14 @@ resolveDefArgs [] env = pure env
 resolveDefArgs (x : xs) env = resolveDefArg x env >>= resolveDefArgs xs
 
 resolveDefArg :: Arg -> Env -> TypeCheckerM' Env
-resolveDefArg (FnArg pos t ident) env = do
+resolveDefArg (FunArg pos t ident) env = do
   addVariableToScope pos ident t env
 
 getCheckExprType :: Expr -> Type -> TypeCheckerM' (Maybe Type)
 getCheckExprType expr (Void _) = throwError $ WrongExpressionType (hasPosition expr)
 getCheckExprType expr expected = do
   evaluated <- getExprType expr
+--  liftIO (putStrLn ((show expected) ++ " - " ++ (show evaluated)))
   getCompType expected evaluated (WrongExpressionType (hasPosition expr))
 
 instantBoolExpValue :: Expr -> Maybe Bool
@@ -242,6 +290,18 @@ instantBoolExpValue (Not _ expr) = not <$> instantBoolExpValue expr
 instantBoolExpValue (EAnd _ e1 e2) = (&&) <$> instantBoolExpValue e1 <*> instantBoolExpValue e2
 instantBoolExpValue (EOr _ e1 e2) = (||) <$> instantBoolExpValue e1 <*> instantBoolExpValue e2
 instantBoolExpValue _ = Nothing
+
+className :: ClassDef -> Ident
+className (ClassFinDef _ ident _) = ident
+className (ClassExtDef _ ident _ _) = ident
+
+classParent :: ClassDef -> Maybe Ident
+classParent (ClassExtDef _ _ pIdent _) = Just pIdent
+classParent _ = Nothing
+
+classBody :: ClassDef -> [CStmt]
+classBody (ClassFinDef _ _ body) = body
+classBody (ClassExtDef _ _ _ body) = body
 
 -- helpers
 

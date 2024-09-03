@@ -9,6 +9,7 @@ import Control.Monad.Writer
 import qualified Data.Map as M
 import qualified Data.Set as S
 import Grammar.AbsLatte
+import Control.Monad
 
 -- buildIn functions
 
@@ -32,18 +33,26 @@ data Env = Env
     variablesInBlock :: [Ident],
     expRetType :: Maybe Type,
     expItemType :: Maybe Type,
-    retType :: Maybe Type
+    retType :: Maybe Type,
+    currClass :: Ident
   }
 
-newtype Store = Store {functions :: M.Map Ident Declaration}
+type ClassFnDecl = M.Map Ident Declaration
+type ClassFieldDecl = M.Map Ident Declaration
 
-data Declaration = Declaration {tpe :: Type, position :: BNFC'Position}
+data Store = Store
+  { functions :: M.Map Ident ClassFnDecl,
+    fields :: M.Map Ident ClassFieldDecl,
+    parents :: M.Map Ident Ident
+  } deriving (Eq, Ord, Show, Read)
+
+data Declaration = Declaration {tpe :: Type, position :: BNFC'Position} deriving (Eq, Ord, Show, Read)
 
 emptyEnv :: Env
-emptyEnv = Env M.empty [] Nothing Nothing Nothing
+emptyEnv = Env M.empty [] Nothing Nothing Nothing (Ident "")
 
 emptyStore :: Store
-emptyStore = Store builtInFunctionsMap
+emptyStore = Store (M.singleton (Ident "") builtInFunctionsMap) M.empty M.empty
 
 -- errors
 
@@ -66,7 +75,9 @@ data SemanticError' a
   | WrongMainCall a
   | ExpectedArrType a
   | PropertyNotExisting Ident a
+  | InheritanceCycle Ident a
   | UnknownSemanticError a
+  | CustomErr String a
 
 instance Show SemanticError where
   show (WrongMainDeclaration pos) =
@@ -101,8 +112,12 @@ instance Show SemanticError where
     "SEMANTIC ERROR: Expected array type" ++ showPos pos
   show (PropertyNotExisting (Ident name) pos) =
       "SEMANTIC ERROR: Property '" ++ name ++ "' not existing" ++ showPos pos
+  show (InheritanceCycle (Ident name) _) =
+      "SEMANTIC ERROR: Classes inheritance cycle with '" ++ name ++ "'"
   show (UnknownSemanticError pos) =
     "SEMANTIC ERROR: Unknown type check exception" ++ showPos pos
+  show (CustomErr s _) =
+    "SEMANTIC ERROR: Custom exception: " ++ s
 
 type SemanticException = SemanticException' BNFC'Position
 
@@ -160,23 +175,52 @@ getVariableType ident pos = do
     Just (Declaration t _) -> pure t
 
 updateFunctions :: Ident -> Declaration -> TypeCheckerM' ()
-updateFunctions ident decl = modify $ \store -> store {functions = M.insert ident decl (functions store)}
+updateFunctions fnIdent decl = do
+  cIdent <- asks currClass
+  fnMap <- gets functions
+  let newClassMap = M.insert fnIdent decl (fnMap M.! cIdent)
+  modify $ \store -> store {functions = M.insert cIdent newClassMap fnMap}
 
 addFunction :: BNFC'Position -> Ident -> Type -> TypeCheckerM' ()
-addFunction pos ident t
-  | ident `elem` builtInFunctions = throwError $ BuiltInRedeclaration ident pos
-  | otherwise = do
-    maybeFunc <- gets $ M.lookup ident . functions
-    case maybeFunc of
-      Nothing -> updateFunctions ident (Declaration t pos)
-      Just (Declaration _ firstPos) -> throwError $ RedeclarationInScope ident firstPos pos
+addFunction pos fnIdent t = do
+  cIdent <- asks currClass
+  maybeFunc <- gets $ \store -> M.lookup fnIdent ((functions store) M.! cIdent)
+  case maybeFunc of
+    Nothing -> updateFunctions fnIdent (Declaration t pos)
+    Just (Declaration _ BNFC'NoPosition) -> throwError $ BuiltInRedeclaration fnIdent pos
+    Just (Declaration _ firstPos) -> throwError $ RedeclarationInScope fnIdent firstPos pos
 
-getFunctionType :: Ident -> BNFC'Position -> TypeCheckerM' Type
-getFunctionType ident pos = do
-  maybeType <- gets $ M.lookup ident . functions
+getFunctionType :: Ident -> Ident -> BNFC'Position -> TypeCheckerM' Type
+getFunctionType cIdent fnIdent pos = do
+  maybeType <- gets $ \store -> M.lookup fnIdent ((functions store) M.! cIdent)
   case maybeType of
-    Nothing -> throwError $ FunctionNotDefined ident pos
+    Nothing -> throwError $ FunctionNotDefined fnIdent pos
     Just (Declaration t _) -> pure t
+
+updateFields :: Ident -> Declaration -> TypeCheckerM' ()
+updateFields fieldIdent decl = do
+  cIdent <- asks currClass
+  fieldsMap <- gets fields
+  let newClassMap = M.insert fieldIdent decl (fieldsMap M.! cIdent)
+  modify $ \store -> store {fields = M.insert cIdent newClassMap fieldsMap}
+
+addField :: BNFC'Position -> Ident -> Type -> TypeCheckerM' ()
+addField pos fieldIdent t = do
+  cIdent <- asks currClass
+  maybeField <- gets $ \store -> M.lookup fieldIdent ((fields store) M.! cIdent)
+  case maybeField of
+    Nothing -> updateFields fieldIdent (Declaration t pos)
+    Just (Declaration _ firstPos) -> throwError $ RedeclarationInScope fieldIdent firstPos pos
+
+getFieldType :: Ident -> Ident -> BNFC'Position -> TypeCheckerM' Type
+getFieldType cIdent fieldIdent pos = do
+  maybeType <- gets $ \store -> M.lookup fieldIdent ((fields store) M.! cIdent)
+  case maybeType of
+    Nothing -> throwError $ PropertyNotExisting fieldIdent pos
+    Just (Declaration t _) -> pure t
+
+getParentIdent :: Ident -> TypeCheckerM' (Maybe Ident)
+getParentIdent cIdent = gets $ M.lookup cIdent . parents
 
 addExpRetTypeToLocalScope :: Type -> TypeCheckerM' Env
 addExpRetTypeToLocalScope t = do
@@ -193,6 +237,59 @@ addRetTypeToLocalScope t = do
   env <- ask
   pure $ env {retType = Just t}
 
+addCurrClass :: Ident -> TypeCheckerM' Env
+addCurrClass ident = do
+  modify $ \store -> store {functions = M.insert ident M.empty (functions store)}
+  modify $ \store -> store {fields = M.insert ident M.empty (fields store)}
+  env <- ask
+  pure $ env {currClass = ident}
+
+getCurrClass :: TypeCheckerM' Ident
+getCurrClass = asks currClass
+
+prepareClassChecks :: Ident -> TypeCheckerM' Env
+prepareClassChecks ident = do
+  env <- ask
+  classFields <- gets $ \store -> (fields store) M.! ident
+  pure $ env {currClass = ident, variables = classFields, variablesInBlock = M.keys classFields}
+
+mergeParentClass :: Ident -> Ident -> TypeCheckerM' ()
+mergeParentClass cIdent pIdent = do
+  st <- get
+  let fnInter = M.intersection ((functions st) M.! cIdent) ((functions st) M.! pIdent)
+  when ((M.size fnInter) > 0) (throwError $ CustomErr ("duplication of fun") BNFC'NoPosition ) -- todo: change to proper err
+  let newFnMap = M.union ((functions st) M.! cIdent) ((functions st) M.! pIdent)
+  let fieldInter = M.intersection ((fields st) M.! cIdent) ((fields st) M.! pIdent)
+  when ((M.size fieldInter) > 1) (throwError $  CustomErr ("duplication of field") BNFC'NoPosition ) -- todo: change to proper err (1 because of "self" field)
+  let newFieldMap = M.union ((fields st) M.! cIdent) ((fields st) M.! pIdent)
+  modify $ \store -> store {functions = M.insert cIdent newFnMap (functions store), fields = M.insert cIdent newFieldMap (fields store)}
+
+addClassParent :: Ident -> (Maybe Ident) -> TypeCheckerM' ()
+addClassParent cIdent (Just pIdent) = modify $ \store -> store {parents = M.insert cIdent pIdent (parents store)}
+addClassParent _ _ = pure ()
+
+resolveClassesInheritances :: TypeCheckerM' ()
+resolveClassesInheritances = do
+  storeMap <- gets fields
+  let visitMap = M.fromList (map (\k -> (k, 0)) (M.keys storeMap))
+  foldM_ (\b a -> resolveClassInheritance a b) visitMap (M.keys storeMap)
+
+-- 0 - undone; 1 - visited, not done; 2 - done
+resolveClassInheritance :: Ident -> M.Map Ident Int -> TypeCheckerM' (M.Map Ident Int)
+resolveClassInheritance cIdent visitMap = case visitMap M.! cIdent of
+  2 -> return visitMap
+  1 -> throwError $ InheritanceCycle cIdent BNFC'NoPosition
+  0 -> do
+    maybeParent <- getParentIdent cIdent
+    case maybeParent of
+      Nothing -> return (M.insert cIdent 2 visitMap)
+      Just pIdent -> do
+        newVisitMap <- resolveClassInheritance pIdent (M.insert cIdent 1 visitMap)
+        mergeParentClass cIdent pIdent
+        return (M.insert cIdent 2 newVisitMap)
+  _ -> throwError $  CustomErr ("strange val in map") BNFC'NoPosition
+
+
 -- Type helpers
 
 tInt :: Type
@@ -208,7 +305,7 @@ tVoid :: Type
 tVoid = Void BNFC'NoPosition
 
 mapArg :: Arg -> Type
-mapArg (FnArg _ t _) = t
+mapArg (FunArg _ t _) = t
 
 ordType :: Type -> Bool
 ordType (Int _) = True
@@ -219,7 +316,7 @@ eqType :: Type -> Bool
 eqType (Int _) = True
 eqType (Str _) = True
 eqType (Bool _) = True
-eqType _ = False
+eqType t = isRefType t
 
 addType :: Type -> Bool
 addType (Int _) = True
@@ -232,10 +329,29 @@ compareType (Str _) (Str _) = True
 compareType (Bool _) (Bool _) = True
 compareType (Void _) (Void _) = True
 compareType (Arr _ t1) (Arr _ t2) = compareType t1 t2
+compareType (Class _ s1) (Class _ s2) = s1 == s2
+compareType (Ref _ (Void _)) t2 = isRefType t2
+compareType t1 (Ref _ (Void _)) = isRefType t1
+compareType (Ref _ t1) (Ref _ t2) = isRefType t1 && isRefType t2
 compareType _ _ = False
 
+isRefType :: Type -> Bool
+isRefType Class {} = True
+isRefType Arr {} = True
+isRefType Ref {} = True
+isRefType _ = False
+
 getCompType :: Type -> Type -> SemanticError -> TypeCheckerM' (Maybe Type)
-getCompType expType t err = if compareType expType t then pure $ Just t else throwError err
+getCompType expType evalType err
+  | compareType expType evalType = pure $ Just evalType
+  | otherwise = do
+    case (expType, evalType) of
+      (Class _ _, Class _ evalIdent) -> do
+        maybeParent <- getParentIdent evalIdent
+        case maybeParent of
+          Just pIdent -> getCompType expType (Class BNFC'NoPosition pIdent) err
+          _ -> throwError err
+      _ -> throwError err
 
 checkExceptType :: Type -> Type -> SemanticError -> TypeCheckerM' ()
 checkExceptType expType t err = if compareType expType t then throwError err else pure ()
