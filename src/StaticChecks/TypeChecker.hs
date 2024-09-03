@@ -99,18 +99,16 @@ checkStmtType (BStmt _ block) = checkBlockType block
 
 checkStmtType Decl {} = pure Nothing -- checked in block
 
-checkStmtType (Ass pos ident expr) = do
-  expected <- getVariableType ident pos
+checkStmtType (Ass _ itemExpr expr) = do
+  expected <- getExprType itemExpr
   _ <- getCheckExprType expr expected
   pure Nothing
 
-checkStmtType (Incr pos ident) = do
-  t <- getVariableType ident pos
-  _ <- getCompType tInt t (WrongVariableType pos)
+checkStmtType (Incr _ itemExpr) = do
+  _ <- getCheckExprType itemExpr tInt
   pure Nothing
-checkStmtType (Decr pos ident) = do
-  t <- getVariableType ident pos
-  _ <- getCompType tInt t (WrongVariableType pos)
+checkStmtType (Decr _ itemExpr) = do
+  _ <- getCheckExprType itemExpr tInt
   pure Nothing
 
 checkStmtType (Ret _ expr) = do
@@ -141,6 +139,13 @@ checkStmtType (While pos expr stmt) = do
     (Just True, Just _) -> pure ret
     (_, _) -> pure Nothing
 
+-- what if arr.length = 0 ???
+checkStmtType (ForEach pos t elIdent arrIdent stmt) = do
+  (Arr _ arrType) <- getVariableType arrIdent BNFC'NoPosition
+  _ <- getCompType arrType t ( WrongVariableType (hasPosition t))
+  loopEnv <- addVariableToLocalScope pos elIdent t
+  local (const loopEnv) (checkBlockType (SBlock (hasPosition stmt) [stmt]))
+
 checkStmtType (SExp _ expr) = getExprType expr >> pure Nothing
 
 -- 'Expr' level checks
@@ -153,6 +158,22 @@ getExprType (ELitInt pos num) = if isInt num then pure tInt else throwError $ In
 getExprType (ELitTrue _) = pure tBool
 getExprType (ELitFalse _) = pure tBool
 getExprType (EString _ _) = pure tStr
+
+-- maybe check if expr > 0 ???
+getExprType (ENewArr pos t expr) = do
+  _ <- getCheckExprType expr tInt
+  pure $ Arr pos t
+getExprType (EArrGet pos arrExpr idExpr) = do
+  _ <- getCheckExprType idExpr tInt
+  arrType <- getExprType arrExpr
+  case arrType of
+    (Arr _ t) -> pure t
+    _ -> throwError $ ExpectedArrType pos
+getExprType (EFieldGet pos itemExpr ident) = do
+  itemType <- getExprType itemExpr
+  case (itemType, ident) of
+    (Arr _ _, Ident "length") -> pure tInt
+    _ -> throwError $ PropertyNotExisting ident pos
 
 getExprType (Neg pos (ELitInt _ num)) = getExprType (ELitInt pos (- num))
 getExprType (Neg _ expr) = getCheckExprType expr tInt <&> fromJust

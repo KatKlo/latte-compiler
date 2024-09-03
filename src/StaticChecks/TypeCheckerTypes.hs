@@ -64,6 +64,8 @@ data SemanticError' a
   | WrongReturnType a
   | DivisionByZero a
   | WrongMainCall a
+  | ExpectedArrType a
+  | PropertyNotExisting Ident a
   | UnknownSemanticError a
 
 instance Show SemanticError where
@@ -95,6 +97,10 @@ instance Show SemanticError where
     "SEMANTIC ERROR: Division by zero" ++ showPos pos
   show (WrongMainCall pos) =
     "SEMANTIC ERROR: Wrong main call" ++ showPos pos
+  show (ExpectedArrType pos) =
+    "SEMANTIC ERROR: Expected array type" ++ showPos pos
+  show (PropertyNotExisting (Ident name) pos) =
+      "SEMANTIC ERROR: Property '" ++ name ++ "' not existing" ++ showPos pos
   show (UnknownSemanticError pos) =
     "SEMANTIC ERROR: Unknown type check exception" ++ showPos pos
 
@@ -225,6 +231,7 @@ compareType (Int _) (Int _) = True
 compareType (Str _) (Str _) = True
 compareType (Bool _) (Bool _) = True
 compareType (Void _) (Void _) = True
+compareType (Arr _ t1) (Arr _ t2) = compareType t1 t2
 compareType _ _ = False
 
 getCompType :: Type -> Type -> SemanticError -> TypeCheckerM' (Maybe Type)

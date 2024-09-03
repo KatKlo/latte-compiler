@@ -3,15 +3,16 @@ GHC        = ghc
 COMPILER_NAME = latc_x86_64
 COMPILER_SOURCE = Main.hs
 
-.PHONY : all clean
+.PHONY : all clean cleanDist
 
-all : $(COMPILER_NAME) cleanDist
+all : $(COMPILER_NAME) clean
 
 $(COMPILER_NAME) : $(COMPILER_SOURCE)
 	${GHC} $< -o ../$@
 
-cleanDist :
+clean :
 	find . \( -name '*.hi' -o -name '*.o' \) -type f -exec rm -f {} \;
+	rm -f Grammar/*.x Grammar/*.y Grammar/*.info Grammar/*.hs.bak Grammar/*.txt Grammar/Makefile Grammar/ErrM.hs Grammar/SkelLatte.hs Grammar/TestLatte.hs Grammar/TestLatte
 
-clean : cleanDist
+cleanDist : clean
 	rm -f ../$(COMPILER_NAME)
