@@ -1,4 +1,4 @@
-{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE TupleSections #-}
 
 module StaticChecks.TypeCheckerTypes where
 
@@ -10,8 +10,10 @@ import qualified Data.Map as M
 import qualified Data.Set as S
 import Grammar.AbsLatte
 import Control.Monad
+import StaticChecks.Errors
+import StaticChecks.GrammarUtils
 
--- buildIn functions
+-- build-in functions
 
 builtInFunctionsMap :: M.Map Ident Declaration
 builtInFunctionsMap =
@@ -37,9 +39,6 @@ data Env = Env
     currClass :: Ident
   }
 
-type ClassFnDecl = M.Map Ident Declaration
-type ClassFieldDecl = M.Map Ident Declaration
-
 data Store = Store
   { functions :: M.Map Ident ClassFnDecl,
     fields :: M.Map Ident ClassFieldDecl,
@@ -48,97 +47,17 @@ data Store = Store
 
 data Declaration = Declaration {tpe :: Type, position :: BNFC'Position} deriving (Eq, Ord, Show, Read)
 
+type ClassFnDecl = M.Map Ident Declaration
+type ClassFieldDecl = M.Map Ident Declaration
+
 emptyEnv :: Env
 emptyEnv = Env M.empty [] Nothing Nothing Nothing (Ident "")
 
 emptyStore :: Store
 emptyStore = Store (M.singleton (Ident "") builtInFunctionsMap) M.empty M.empty
 
--- errors
-
-type SemanticError = SemanticError' BNFC'Position
-
-data SemanticError' a
-  = WrongMainDeclaration a
-  | RedeclarationInScope Ident a a
-  | BuiltInRedeclaration Ident a
-  | NoReturnStmt Ident a
-  | VoidVariable a
-  | IntOutOfBound Integer a
-  | WrongExpressionType a
-  | VariableNotDefined Ident a
-  | FunctionNotDefined Ident a
-  | WrongNumberOfArgs a
-  | WrongVariableType a
-  | WrongReturnType a
-  | DivisionByZero a
-  | WrongMainCall a
-  | ExpectedArrType a
-  | PropertyNotExisting Ident a
-  | InheritanceCycle Ident a
-  | UnknownSemanticError a
-  | CustomErr String a
-
-instance Show SemanticError where
-  show (WrongMainDeclaration pos) =
-    "SEMANTIC ERROR: Wrong main declaration" ++ showPos pos
-  show (RedeclarationInScope (Ident name) pos1 pos2) =
-    "SEMANTIC ERROR: " ++ name ++ " defined" ++ showPos pos1 ++ " and redefined" ++ showPos pos2
-  show (BuiltInRedeclaration (Ident name) pos) =
-    "SEMANTIC ERROR: Built-in function '" ++ name ++ "' redefined" ++ showPos pos
-  show (NoReturnStmt (Ident name) pos) =
-    "SEMANTIC ERROR: No return statement in function '" ++ name ++ "' defined" ++ showPos pos
-  show (VoidVariable pos) =
-    "SEMANTIC ERROR: Void variable not allowed" ++ showPos pos
-  show (IntOutOfBound num pos) =
-    "SEMANTIC ERROR: Integer " ++ show num ++ " out of bound" ++ showPos pos
-  show (WrongExpressionType pos) =
-    "SEMANTIC ERROR: Wrong expression type" ++ showPos pos
-  show (VariableNotDefined (Ident name) pos) =
-    "SEMANTIC ERROR: Variable '" ++ name ++ "' not defined" ++ showPos pos
-  show (FunctionNotDefined (Ident name) pos) =
-    "SEMANTIC ERROR: Function '" ++ name ++ "' not defined" ++ showPos pos
-  show (WrongNumberOfArgs pos) =
-    "SEMANTIC ERROR: Wrong number of arguments" ++ showPos pos
-  show (WrongVariableType pos) =
-    "SEMANTIC ERROR: Wrong variable type" ++ showPos pos
-  show (WrongReturnType pos) =
-    "SEMANTIC ERROR: Wrong return type" ++ showPos pos
-  show (DivisionByZero pos) =
-    "SEMANTIC ERROR: Division by zero" ++ showPos pos
-  show (WrongMainCall pos) =
-    "SEMANTIC ERROR: Wrong main call" ++ showPos pos
-  show (ExpectedArrType pos) =
-    "SEMANTIC ERROR: Expected array type" ++ showPos pos
-  show (PropertyNotExisting (Ident name) pos) =
-      "SEMANTIC ERROR: Property '" ++ name ++ "' not existing" ++ showPos pos
-  show (InheritanceCycle (Ident name) _) =
-      "SEMANTIC ERROR: Classes inheritance cycle with '" ++ name ++ "'"
-  show (UnknownSemanticError pos) =
-    "SEMANTIC ERROR: Unknown type check exception" ++ showPos pos
-  show (CustomErr s _) =
-    "SEMANTIC ERROR: Custom exception: " ++ s
-
-type SemanticException = SemanticException' BNFC'Position
-
-data SemanticException' a
-  = StmtsNeverReached a
-  | InfiniteLoop a
-  | UnknownSemanticException a
-
-instance Show SemanticException where
-  show (StmtsNeverReached pos) =
-    "SEMANTIC EXCEPTION: Statements never reached" ++ showPos pos
-  show (UnknownSemanticException pos) =
-    "SEMANTIC EXCEPTION: Unknown type check exception" ++ showPos pos
-  show (InfiniteLoop pos) =
-    "SEMANTIC EXCEPTION: Infinite loop" ++ showPos pos
-
-showPos :: BNFC'Position -> String
-showPos (Just (line, column)) = concat [" at line ", show line, ", column ", show column]
-showPos _ = ""
-
 -- TypeChecker monad
+
 type TypeCheckerM' a = WriterT [SemanticException] (StateT Store (ReaderT Env (ExceptT SemanticError IO))) a
 
 -- environment helpers
@@ -256,23 +175,25 @@ prepareClassChecks ident = do
 mergeParentClass :: Ident -> Ident -> TypeCheckerM' ()
 mergeParentClass cIdent pIdent = do
   st <- get
-  let fnInter = M.intersection ((functions st) M.! cIdent) ((functions st) M.! pIdent)
-  when ((M.size fnInter) > 0) (throwError $ CustomErr ("duplication of fun") BNFC'NoPosition ) -- todo: change to proper err
-  let newFnMap = M.union ((functions st) M.! cIdent) ((functions st) M.! pIdent)
-  let fieldInter = M.intersection ((fields st) M.! cIdent) ((fields st) M.! pIdent)
-  when ((M.size fieldInter) > 1) (throwError $  CustomErr ("duplication of field") BNFC'NoPosition ) -- todo: change to proper err (1 because of "self" field)
-  let newFieldMap = M.union ((fields st) M.! cIdent) ((fields st) M.! pIdent)
+  let stFields = fields st
+  let stFunctions = functions st
+  let fnInter = M.intersection (stFunctions M.! cIdent) (stFunctions M.! pIdent)
+  when (M.size fnInter > 0) (throwError $ CustomError "duplication of fun" BNFC'NoPosition ) -- todo: change to proper err
+  let newFnMap = M.union (stFunctions M.! cIdent) (stFunctions M.! pIdent)
+  let fieldInter = M.intersection (stFields M.! cIdent) (stFields M.! pIdent)
+  when (M.size fieldInter > 0) (throwError $  CustomError "duplication of field" BNFC'NoPosition ) -- todo: change to proper err
+  let newFieldMap = M.union (stFields M.! cIdent) (stFields M.! pIdent)
   modify $ \store -> store {functions = M.insert cIdent newFnMap (functions store), fields = M.insert cIdent newFieldMap (fields store)}
 
-addClassParent :: Ident -> (Maybe Ident) -> TypeCheckerM' ()
+addClassParent :: Ident -> Maybe Ident -> TypeCheckerM' ()
 addClassParent cIdent (Just pIdent) = modify $ \store -> store {parents = M.insert cIdent pIdent (parents store)}
 addClassParent _ _ = pure ()
 
 resolveClassesInheritances :: TypeCheckerM' ()
 resolveClassesInheritances = do
   storeMap <- gets fields
-  let visitMap = M.fromList (map (\k -> (k, 0)) (M.keys storeMap))
-  foldM_ (\b a -> resolveClassInheritance a b) visitMap (M.keys storeMap)
+  let visitMap = M.fromList (map (, 0) (M.keys storeMap))
+  foldM_ (flip resolveClassInheritance) visitMap (M.keys storeMap)
 
 -- 0 - undone; 1 - visited, not done; 2 - done
 resolveClassInheritance :: Ident -> M.Map Ident Int -> TypeCheckerM' (M.Map Ident Int)
@@ -287,65 +208,18 @@ resolveClassInheritance cIdent visitMap = case visitMap M.! cIdent of
         newVisitMap <- resolveClassInheritance pIdent (M.insert cIdent 1 visitMap)
         mergeParentClass cIdent pIdent
         return (M.insert cIdent 2 newVisitMap)
-  _ -> throwError $  CustomErr ("strange val in map") BNFC'NoPosition
+  _ -> throwError $  CustomError "strange val in map" BNFC'NoPosition
 
 
 -- Type helpers
 
-tInt :: Type
-tInt = Int BNFC'NoPosition
-
-tStr :: Type
-tStr = Str BNFC'NoPosition
-
-tBool :: Type
-tBool = Bool BNFC'NoPosition
-
-tVoid :: Type
-tVoid = Void BNFC'NoPosition
-
-mapArg :: Arg -> Type
-mapArg (FunArg _ t _) = t
-
-ordType :: Type -> Bool
-ordType (Int _) = True
-ordType (Str _) = True
-ordType _ = False
-
-eqType :: Type -> Bool
-eqType (Int _) = True
-eqType (Str _) = True
-eqType (Bool _) = True
-eqType t = isRefType t
-
-addType :: Type -> Bool
-addType (Int _) = True
-addType (Str _) = True
-addType _ = False
-
-compareType :: Type -> Type -> Bool
-compareType (Int _) (Int _) = True
-compareType (Str _) (Str _) = True
-compareType (Bool _) (Bool _) = True
-compareType (Void _) (Void _) = True
-compareType (Arr _ t1) (Arr _ t2) = compareType t1 t2
-compareType (Class _ s1) (Class _ s2) = s1 == s2
-compareType (Ref _ (Void _)) t2 = isRefType t2
-compareType t1 (Ref _ (Void _)) = isRefType t1
-compareType (Ref _ t1) (Ref _ t2) = isRefType t1 && isRefType t2
-compareType _ _ = False
-
-isRefType :: Type -> Bool
-isRefType Class {} = True
-isRefType Arr {} = True
-isRefType Ref {} = True
-isRefType _ = False
-
 getCompType :: Type -> Type -> SemanticError -> TypeCheckerM' (Maybe Type)
 getCompType expType evalType err
-  | compareType expType evalType = pure $ Just evalType
+  | compareTypes expType evalType = pure $ Just evalType
   | otherwise = do
     case (expType, evalType) of
+      (Ref _ t1, t2) -> getCompType t1 t2 err
+      (t1, Ref _ t2) -> getCompType t1 t2 err
       (Class _ _, Class _ evalIdent) -> do
         maybeParent <- getParentIdent evalIdent
         case maybeParent of
@@ -354,7 +228,7 @@ getCompType expType evalType err
       _ -> throwError err
 
 checkExceptType :: Type -> Type -> SemanticError -> TypeCheckerM' ()
-checkExceptType expType t err = if compareType expType t then throwError err else pure ()
+checkExceptType expType t err = if compareTypes expType t then throwError err else pure ()
 
 printWarning :: SemanticException -> TypeCheckerM' ()
 printWarning e = tell [e]

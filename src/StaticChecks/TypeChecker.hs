@@ -11,6 +11,8 @@ import Data.Functor
 import Data.Maybe
 import Grammar.AbsLatte
 import StaticChecks.TypeCheckerTypes
+import StaticChecks.Errors
+import StaticChecks.GrammarUtils
 import Data.Ix (inRange)
 import Data.Int (Int32)
 
@@ -24,11 +26,7 @@ typeCheck prog = runExceptT (runReaderT (evalStateT (execWriterT (checkProgram p
 checkProgram :: Program -> TypeCheckerM' ()
 checkProgram (Prog _ topDefs) = do
   mapM_ saveTopDef topDefs
---  store <- get
---  _ <- liftIO (print store)
   resolveClassesInheritances
---  store <- get
---  _ <- liftIO (print store)
   checkMainDeclaration
   mapM_ checkTopDef topDefs
 
@@ -48,7 +46,7 @@ saveTopDef (ClassTopDef _ classDef) = saveClassDef classDef
 
 saveFnDef :: FnDef -> TypeCheckerM' ()
 saveFnDef (FunDef pos t ident args _) = do
-  let mappedArgs = map mapArg args
+  let mappedArgs = map argType args
   addFunction pos ident (Fun pos t mappedArgs)
 
 saveClassDef :: ClassDef -> TypeCheckerM' ()
@@ -156,7 +154,7 @@ checkStmtType (CondElse _ expr s1 s2) = do
   _ <- getCheckExprType expr tBool
   ret1 <- checkBlockType (SBlock (hasPosition s1) [s1])
   ret2 <- checkBlockType (SBlock (hasPosition s2) [s2])
-  let instantRes = instantBoolExpValue expr
+  let instantRes = instantBoolExprValue expr
   case (instantRes, ret1, ret2) of
     (Just True, _, _) -> pure ret1
     (Just False, _, _) -> pure ret2
@@ -166,7 +164,7 @@ checkStmtType (CondElse _ expr s1 s2) = do
 checkStmtType (While pos expr stmt) = do
   _ <- getCheckExprType expr tBool
   ret <- checkBlockType (SBlock (hasPosition stmt) [stmt])
-  let instantRes = instantBoolExpValue expr
+  let instantRes = instantBoolExprValue expr
   case (instantRes, ret) of
     (Just True, Nothing) -> printWarning (InfiniteLoop pos) >> pure Nothing
     (Just True, Just _) -> pure ret
@@ -240,7 +238,7 @@ getExprType (EMul _ e1 op e2) = do
 getExprType (EAdd _ e1 (Minus _) e2) = getCheckExprType e1 tInt >> getCheckExprType e2 tInt <&> fromJust
 getExprType (EAdd _ e1 _ e2) = do
   t1 <- getExprType e1
-  if addType t1
+  if isAddType t1
     then getCheckExprType e2 t1 <&> fromJust
     else throwError $ WrongExpressionType (hasPosition e1)
 
@@ -251,9 +249,9 @@ getExprType (ERel _ e1 op e2) = do
     else throwError $ WrongExpressionType (hasPosition e1)
   where
     relType :: RelOp -> Type -> Bool
-    relType (EQU _) = eqType
-    relType (NE _) = eqType
-    relType _ = ordType
+    relType (EQU _) = isEqType
+    relType (NE _) = isEqType
+    relType _ = isOrdType
 
 getExprType (EApp pos ident exprs) = do
   when (ident == Ident "main") (throwError $ WrongMainCall pos)
@@ -280,28 +278,7 @@ getCheckExprType :: Expr -> Type -> TypeCheckerM' (Maybe Type)
 getCheckExprType expr (Void _) = throwError $ WrongExpressionType (hasPosition expr)
 getCheckExprType expr expected = do
   evaluated <- getExprType expr
---  liftIO (putStrLn ((show expected) ++ " - " ++ (show evaluated)))
   getCompType expected evaluated (WrongExpressionType (hasPosition expr))
-
-instantBoolExpValue :: Expr -> Maybe Bool
-instantBoolExpValue (ELitTrue _) = Just True
-instantBoolExpValue (ELitFalse _) = Just False
-instantBoolExpValue (Not _ expr) = not <$> instantBoolExpValue expr
-instantBoolExpValue (EAnd _ e1 e2) = (&&) <$> instantBoolExpValue e1 <*> instantBoolExpValue e2
-instantBoolExpValue (EOr _ e1 e2) = (||) <$> instantBoolExpValue e1 <*> instantBoolExpValue e2
-instantBoolExpValue _ = Nothing
-
-className :: ClassDef -> Ident
-className (ClassFinDef _ ident _) = ident
-className (ClassExtDef _ ident _ _) = ident
-
-classParent :: ClassDef -> Maybe Ident
-classParent (ClassExtDef _ _ pIdent _) = Just pIdent
-classParent _ = Nothing
-
-classBody :: ClassDef -> [CStmt]
-classBody (ClassFinDef _ _ body) = body
-classBody (ClassExtDef _ _ _ body) = body
 
 -- helpers
 
