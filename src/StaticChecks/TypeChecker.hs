@@ -25,6 +25,7 @@ typeCheck prog = runExceptT (runReaderT (evalStateT (execWriterT (checkProgram p
 
 checkProgram :: Program -> TypeCheckerM' ()
 checkProgram (Prog _ topDefs) = do
+  mapM_ saveClassAsNewType topDefs
   mapM_ saveTopDef topDefs
   resolveClassesInheritances
   checkMainDeclaration
@@ -40,6 +41,10 @@ checkMainDeclaration = do
 
 -- 'TopDef' level checks
 
+saveClassAsNewType :: TopDef -> TypeCheckerM' ()
+saveClassAsNewType (ClassTopDef _ classDef) = addNewClassDef (className classDef)
+saveClassAsNewType _ = pure ()
+
 saveTopDef :: TopDef -> TypeCheckerM' ()
 saveTopDef (FnTopDef _ fnDef) = saveFnDef fnDef
 saveTopDef (ClassTopDef _ classDef) = saveClassDef classDef
@@ -52,13 +57,9 @@ saveFnDef (FunDef pos t ident args _) = do
 saveClassDef :: ClassDef -> TypeCheckerM' ()
 saveClassDef cls = do
   let cIdent = className cls
-  _ <- addClassParent cIdent (classParent cls)
-  newEnv <- addNewCurrClass cIdent
+  _ <- addClassParent cIdent (classParent cls) (hasPosition cls)
+  newEnv <- setCurrClass cIdent
   local (const newEnv) (mapM_ saveCStmt (classBody cls))
-
-saveCStmt :: CStmt -> TypeCheckerM' ()
-saveCStmt (MethodDef _ fnDef) = saveFnDef fnDef
-saveCStmt (FieldDef pos fieldType fieldIdent) = addField fieldIdent fieldType pos
 
 checkTopDef :: TopDef -> TypeCheckerM' ()
 checkTopDef (FnTopDef _ fnDef) = checkFnDef fnDef
@@ -67,7 +68,7 @@ checkTopDef (ClassTopDef _ classDef) = checkClassDef classDef
 checkFnDef :: FnDef -> TypeCheckerM' ()
 checkFnDef (FunDef pos t ident args (SBlock _ stmts)) = do
   newEnv <- addExpRetType t
-  blockEnv <- resolveDefArgs args newEnv
+  blockEnv <- foldM resolveDefArg newEnv args
   evaluated <- local (const blockEnv) (checkStmtsListType stmts)
   case evaluated of
     Just _ -> pure ()
@@ -75,8 +76,14 @@ checkFnDef (FunDef pos t ident args (SBlock _ stmts)) = do
 
 checkClassDef :: ClassDef -> TypeCheckerM' ()
 checkClassDef cls = do
-  newEnv <- addCurrClass (className cls)
+  newEnv <- setCurrClass (className cls)
   local (const newEnv) (mapM_ checkCStmt (classBody cls))
+
+-- 'CStmt' level checks
+
+saveCStmt :: CStmt -> TypeCheckerM' ()
+saveCStmt (MethodDef _ fnDef) = saveFnDef fnDef
+saveCStmt (FieldDef pos fieldType fieldIdent) = addField fieldIdent fieldType pos
 
 checkCStmt :: CStmt -> TypeCheckerM' ()
 checkCStmt (MethodDef _ fnDef) = checkFnDef fnDef
@@ -130,15 +137,18 @@ checkStmtType (BStmt _ block) = checkBlockType block
 
 checkStmtType Decl {} = pure Nothing -- checked in block
 
-checkStmtType (Ass _ itemExpr expr) = do
+checkStmtType (Ass pos itemExpr expr) = do
+  unless (isAssignExpr itemExpr) (throwError $ OperationImpossible pos)
   expected <- getExprType itemExpr
   _ <- getCheckExprType expr expected
   pure Nothing
 
-checkStmtType (Incr _ itemExpr) = do
+checkStmtType (Incr pos itemExpr) = do
+  unless (isAssignExpr itemExpr) (throwError $ OperationImpossible pos)
   _ <- getCheckExprType itemExpr tInt
   pure Nothing
-checkStmtType (Decr _ itemExpr) = do
+checkStmtType (Decr pos itemExpr) = do
+  unless (isAssignExpr itemExpr) (throwError $ OperationImpossible pos)
   _ <- getCheckExprType itemExpr tInt
   pure Nothing
 
@@ -170,9 +180,9 @@ checkStmtType (While pos expr stmt) = do
     (Just True, Just _) -> pure ret
     (_, _) -> pure Nothing
 
--- what if arr.length = 0 ???
+-- todo: what if arr.length = 0 ???
 checkStmtType (ForEach pos t elIdent arrExpr stmt) = do
-  (Arr _ arrType) <-getExprType arrExpr
+  (Arr _ arrType) <- getExprType arrExpr -- make it better error for the user
   _ <- getCompType arrType t ( WrongVariableType (hasPosition t))
   checkBlockType (SBlock (hasPosition stmt) [(Decl pos t [NoInit pos elIdent]), stmt])
 
@@ -184,22 +194,26 @@ getExprType :: Expr -> TypeCheckerM' Type
 
 getExprType (EVar pos ident) = getVariableType ident pos
 getExprType (ESelf pos) = do
-  cIdent <- getCurrClass
-  pure $ Class pos cIdent -- todo: what if not in class?
+  cIdent <- getCurrClass  -- todo: what if not in class?
+  pure $ Class pos cIdent
 
 getExprType (ELitInt pos num) = if isInt num then pure tInt else throwError $ IntOutOfBound num pos
 getExprType (ELitTrue _) = pure tBool
 getExprType (ELitFalse _) = pure tBool
 getExprType (EString _ _) = pure tStr
-getExprType (EClassNull pos ident) = pure $ Ref pos (Class pos ident)
-getExprType (EArrNull pos t) = pure $ Ref pos t
+getExprType (EClassNull pos ident) = checkClassValidity ident pos >> pure (Ref pos (Class pos ident))
+getExprType (EArrNull pos t) = checkTypeValidity t pos >> pure (Ref pos t)
 getExprType (ENull pos) = pure $ Ref pos tVoid
 
--- maybe check if expr > 0 ???
 getExprType (ENewArr pos t expr) = do
-  _ <- getCheckExprType expr tInt
+  _ <- checkTypeValidity t pos
+  _ <- getCheckExprType expr tInt -- todo: maybe check if expr > 0 ?
   pure $ Arr pos t
-getExprType (ENewObj _ t) = pure t
+
+getExprType (ENewObj pos t@(Class _ _)) = do
+  _ <- checkTypeValidity t pos
+  pure t
+getExprType (ENewObj _ _) = undefined -- todo: throw an error?
 
 getExprType (EArrGet pos arrExpr idExpr) = do
   _ <- getCheckExprType idExpr tInt
@@ -231,9 +245,10 @@ getExprType (EMul _ e1 op e2) = do
   _ <- getCheckExprType e1 tInt
   _ <- getCheckExprType e2 tInt
   case (e2, op) of
-    (ELitInt _ 0, Div _) -> throwError $ DivisionByZero (hasPosition e2)
-    (ELitInt _ 0, Mod _) -> throwError $ DivisionByZero (hasPosition e2)
-    _ -> pure tInt
+    (ELitInt _ 0, Div _) -> printWarning $ DivisionByZero (hasPosition e2)
+    (ELitInt _ 0, Mod _) -> printWarning $ DivisionByZero (hasPosition e2)
+    _ -> pure ()
+  pure tInt
 
 getExprType (EAdd _ e1 (Minus _) e2) = getCheckExprType e1 tInt >> getCheckExprType e2 tInt <&> fromJust
 getExprType (EAdd _ e1 _ e2) = do
@@ -266,12 +281,8 @@ resolveAppArgs _ [] [] = pure ()
 resolveAppArgs pos (t : xs) (expr : ys) = getCheckExprType expr t >> resolveAppArgs pos xs ys
 resolveAppArgs pos _ _ = throwError $ WrongNumberOfArgs pos
 
-resolveDefArgs :: [Arg] -> Env -> TypeCheckerM' Env
-resolveDefArgs [] env = pure env
-resolveDefArgs (x : xs) env = resolveDefArg x env >>= resolveDefArgs xs
-
-resolveDefArg :: Arg -> Env -> TypeCheckerM' Env
-resolveDefArg (FunArg pos t ident) env = addVariableToScope ident t pos env
+resolveDefArg :: Env -> Arg -> TypeCheckerM' Env
+resolveDefArg env (FunArg pos t ident) = addVariableToScope ident t pos env
 
 getCheckExprType :: Expr -> Type -> TypeCheckerM' (Maybe Type)
 getCheckExprType expr (Void _) = throwError $ WrongExpressionType (hasPosition expr)

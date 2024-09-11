@@ -11,7 +11,9 @@ data SemanticError' a
   | RedeclarationInScope Ident a a
   | BuiltInRedeclaration Ident a
   | NoReturnStmt Ident a
-  | VoidVariable a
+  | VoidNotAllowed a
+  | ClassNotDefined Ident a
+  | ClassRedefined Ident a
   | IntOutOfBound Integer a
   | WrongExpressionType a
   | VariableNotDefined Ident a
@@ -20,11 +22,11 @@ data SemanticError' a
   | WrongNumberOfArgs a
   | WrongVariableType a
   | WrongReturnType a
-  | DivisionByZero a
   | WrongMainCall a
   | ExpectedArrType a
   | PropertyNotExisting Ident a
   | InheritanceCycle Ident a
+  | OperationImpossible a
   | CustomError String a
   | UnknownSemanticError a
 
@@ -37,8 +39,12 @@ instance Show SemanticError where
     "SEMANTIC ERROR: Built-in function '" ++ name ++ "' redefined" ++ showPos pos
   show (NoReturnStmt (Ident name) pos) =
     "SEMANTIC ERROR: No return statement in function '" ++ name ++ "' defined" ++ showPos pos
-  show (VoidVariable pos) =
-    "SEMANTIC ERROR: Void variable not allowed" ++ showPos pos
+  show (VoidNotAllowed pos) =
+    "SEMANTIC ERROR: Void usage not allowed" ++ showPos pos
+  show (ClassNotDefined (Ident ident) pos) =
+    "SEMANTIC ERROR: Class '" ++ ident ++ "' not defined" ++ showPos pos
+  show (ClassRedefined (Ident ident) _) =
+    "SEMANTIC ERROR: Class '" ++ ident ++ "' defined multiple times"
   show (IntOutOfBound num pos) =
     "SEMANTIC ERROR: Integer " ++ show num ++ " out of bound" ++ showPos pos
   show (WrongExpressionType pos) =
@@ -55,8 +61,6 @@ instance Show SemanticError where
     "SEMANTIC ERROR: Wrong variable type" ++ showPos pos
   show (WrongReturnType pos) =
     "SEMANTIC ERROR: Wrong return type" ++ showPos pos
-  show (DivisionByZero pos) =
-    "SEMANTIC ERROR: Division by zero" ++ showPos pos
   show (WrongMainCall pos) =
     "SEMANTIC ERROR: Wrong main call" ++ showPos pos
   show (ExpectedArrType pos) =
@@ -65,6 +69,8 @@ instance Show SemanticError where
       "SEMANTIC ERROR: Property '" ++ name ++ "' not existing" ++ showPos pos
   show (InheritanceCycle (Ident name) _) =
       "SEMANTIC ERROR: Classes inheritance cycle with '" ++ name ++ "'"
+  show (OperationImpossible pos) =
+    "SEMANTIC ERROR: Cannot execute operation" ++ showPos pos
   show (CustomError s _) =
     "SEMANTIC ERROR: Custom error: " ++ s
   show (UnknownSemanticError pos) =
@@ -76,6 +82,7 @@ type SemanticException = SemanticException' BNFC'Position
 data SemanticException' a
   = StmtsNeverReached a
   | InfiniteLoop a
+  | DivisionByZero a
   | UnknownSemanticException a
 
 instance Show SemanticException where
@@ -83,6 +90,8 @@ instance Show SemanticException where
     "SEMANTIC EXCEPTION: Statements never reached" ++ showPos pos
   show (InfiniteLoop pos) =
     "SEMANTIC EXCEPTION: Infinite loop" ++ showPos pos
+  show (DivisionByZero pos) =
+    "SEMANTIC EXCEPTION: Division by zero" ++ showPos pos
   show (UnknownSemanticException pos) =
     "SEMANTIC EXCEPTION: Unknown type check exception" ++ showPos pos
 

@@ -134,7 +134,10 @@ addFieldToClass fieldIdent t pos cIdent = do
     Just (Declaration _ firstPos) -> throwError $ RedeclarationInScope fieldIdent firstPos pos
 
 addField :: Ident -> Type -> BNFC'Position -> TypeCheckerM' ()
-addField fieldIdent t pos = asks currClass >>= addFieldToClass fieldIdent t pos
+addField fieldIdent t pos = do
+  _ <- checkTypeValidity t pos
+  currCl <- asks currClass
+  addFieldToClass fieldIdent t pos currCl
 
 getFieldType :: Ident -> Ident -> BNFC'Position -> TypeCheckerM' Type
 getFieldType cIdent fieldIdent pos = do
@@ -145,9 +148,11 @@ getFieldType cIdent fieldIdent pos = do
 
 -- classes' parents
 
-addClassParent :: Ident -> Maybe Ident -> TypeCheckerM' ()
-addClassParent cIdent (Just pIdent) = modify $ \store -> store {parents = M.insert cIdent pIdent (parents store)}
-addClassParent _ _ = pure ()
+addClassParent :: Ident -> Maybe Ident -> BNFC'Position ->TypeCheckerM' ()
+addClassParent cIdent (Just pIdent) pos = do
+  checkClassValidity pIdent pos
+  modify $ \store -> store {parents = M.insert cIdent pIdent (parents store)}
+addClassParent _ _ _ = pure ()
 
 getParentIdent :: Ident -> TypeCheckerM' (Maybe Ident)
 getParentIdent cIdent = gets $ M.lookup cIdent . parents
@@ -166,7 +171,7 @@ addVariableToScope ident t pos env
     let Declaration _ firstPos = variables env M.! ident
     throwError $ RedeclarationInScope ident firstPos pos
   | otherwise = do
-    when (compareTypes tVoid t) (throwError $ VoidVariable (hasPosition t))
+    _ <- checkTypeValidity t pos
     pure $ addVariableToEnv ident (Declaration t pos) env
 
 addVariableToLocalScope :: Ident -> Type -> BNFC'Position -> TypeCheckerM' Env
@@ -210,16 +215,17 @@ addRetType t = do
 
 -- current class
 
-addCurrClass :: Ident -> TypeCheckerM' Env
-addCurrClass ident = do
+setCurrClass :: Ident -> TypeCheckerM' Env
+setCurrClass ident = do
   env <- ask
   pure $ env {currClass = ident}
 
-addNewCurrClass :: Ident -> TypeCheckerM' Env
-addNewCurrClass ident = do
+addNewClassDef :: Ident -> TypeCheckerM' ()
+addNewClassDef ident = do
+  typeExist <- isClassDefined ident
+  when typeExist (throwError $ ClassRedefined ident BNFC'NoPosition)
   modify $ \store -> store {functions = M.insert ident M.empty (functions store)}
   modify $ \store -> store {fields = M.insert ident M.empty (fields store)}
-  addCurrClass ident
 
 getCurrClass :: TypeCheckerM' Ident
 getCurrClass = asks currClass
@@ -264,14 +270,29 @@ getCompType expType evalType err
   | compareTypes expType evalType = pure $ Just evalType
   | otherwise = do
     case (expType, evalType) of
-      (Ref _ t1, t2) -> getCompType t1 t2 err
-      (t1, Ref _ t2) -> getCompType t1 t2 err
       (Class _ _, Class _ evalIdent) -> do
         maybeParent <- getParentIdent evalIdent
         case maybeParent of
           Just pIdent -> getCompType expType (Class BNFC'NoPosition pIdent) err
           _ -> throwError err
       _ -> throwError err
+
+checkTypeValidity :: Type -> BNFC'Position -> TypeCheckerM' ()
+checkTypeValidity Int {} _ = pure ()
+checkTypeValidity Str {} _ = pure ()
+checkTypeValidity Bool {} _ = pure ()
+checkTypeValidity (Void _ ) pos = throwError $ VoidNotAllowed pos
+checkTypeValidity (Arr _ t) pos = checkTypeValidity t pos
+checkTypeValidity (Class _ ident) pos = checkClassValidity ident pos
+checkTypeValidity _ _ = undefined -- should not happen
+
+checkClassValidity :: Ident -> BNFC'Position -> TypeCheckerM' ()
+checkClassValidity ident pos = do
+  typeExist <- isClassDefined ident
+  unless typeExist (throwError $ ClassNotDefined ident pos)
+
+isClassDefined :: Ident -> TypeCheckerM' Bool
+isClassDefined ident = gets $ M.member ident . functions
 
 printWarning :: SemanticException -> TypeCheckerM' ()
 printWarning e = tell [e]
