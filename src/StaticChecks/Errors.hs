@@ -16,6 +16,7 @@ data SemanticError' a
   | WrongExpressionType a
   | VariableNotDefined Ident a
   | FunctionNotDefined Ident a
+  | MethodNotDefined Ident Ident a
   | WrongNumberOfArgs a
   | WrongVariableType a
   | WrongReturnType a
@@ -31,7 +32,7 @@ instance Show SemanticError where
   show (WrongMainDeclaration pos) =
     "SEMANTIC ERROR: Wrong main declaration" ++ showPos pos
   show (RedeclarationInScope (Ident name) pos1 pos2) =
-    "SEMANTIC ERROR: " ++ name ++ " defined" ++ showPos pos1 ++ " and redefined" ++ showPos pos2
+    "SEMANTIC ERROR: " ++ name ++ " defined" ++ showPos (min pos1 pos2) ++ " and redefined" ++ showPos (max pos1 pos2)
   show (BuiltInRedeclaration (Ident name) pos) =
     "SEMANTIC ERROR: Built-in function '" ++ name ++ "' redefined" ++ showPos pos
   show (NoReturnStmt (Ident name) pos) =
@@ -46,6 +47,8 @@ instance Show SemanticError where
     "SEMANTIC ERROR: Variable '" ++ name ++ "' not defined" ++ showPos pos
   show (FunctionNotDefined (Ident name) pos) =
     "SEMANTIC ERROR: Function '" ++ name ++ "' not defined" ++ showPos pos
+  show (MethodNotDefined (Ident cName) (Ident fnName) pos) =
+    "SEMANTIC ERROR: Method '" ++ fnName ++ "' in class '" ++ cName ++ "' not defined" ++ showPos pos
   show (WrongNumberOfArgs pos) =
     "SEMANTIC ERROR: Wrong number of arguments" ++ showPos pos
   show (WrongVariableType pos) =

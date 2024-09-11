@@ -13,22 +13,11 @@ import Control.Monad
 import StaticChecks.Errors
 import StaticChecks.GrammarUtils
 
--- build-in functions
+-- TypeChecker monad
 
-builtInFunctionsMap :: M.Map Ident Declaration
-builtInFunctionsMap =
-  M.fromList
-    [ (Ident "printInt", Declaration (Fun BNFC'NoPosition tVoid [tInt]) BNFC'NoPosition),
-      (Ident "printString", Declaration (Fun BNFC'NoPosition tVoid [tStr]) BNFC'NoPosition),
-      (Ident "error", Declaration (Fun BNFC'NoPosition tVoid []) BNFC'NoPosition),
-      (Ident "readInt", Declaration (Fun BNFC'NoPosition tInt []) BNFC'NoPosition),
-      (Ident "readString", Declaration (Fun BNFC'NoPosition tStr []) BNFC'NoPosition)
-    ]
+type TypeCheckerM' a = WriterT [SemanticException] (StateT Store (ReaderT Env (ExceptT SemanticError IO))) a
 
-builtInFunctions :: S.Set Ident
-builtInFunctions = M.keysSet builtInFunctionsMap
-    
--- environment
+-- environment and store
 
 data Env = Env
   { variables :: M.Map Ident Declaration,
@@ -50,169 +39,226 @@ data Declaration = Declaration {tpe :: Type, position :: BNFC'Position} deriving
 type ClassFnDecl = M.Map Ident Declaration
 type ClassFieldDecl = M.Map Ident Declaration
 
-emptyEnv :: Env
-emptyEnv = Env M.empty [] Nothing Nothing Nothing (Ident "")
+-- build-in functions
+
+builtInFunctionsMap :: M.Map Ident Declaration
+builtInFunctionsMap =
+  M.fromList
+    [ (Ident "printInt", Declaration (Fun BNFC'NoPosition tVoid [tInt]) BNFC'NoPosition),
+      (Ident "printString", Declaration (Fun BNFC'NoPosition tVoid [tStr]) BNFC'NoPosition),
+      (Ident "error", Declaration (Fun BNFC'NoPosition tVoid []) BNFC'NoPosition),
+      (Ident "readInt", Declaration (Fun BNFC'NoPosition tInt []) BNFC'NoPosition),
+      (Ident "readString", Declaration (Fun BNFC'NoPosition tStr []) BNFC'NoPosition)
+    ]
+
+builtInFunctions :: S.Set Ident
+builtInFunctions = M.keysSet builtInFunctionsMap
+
+-- new environment / store
 
 emptyStore :: Store
 emptyStore = Store (M.singleton (Ident "") builtInFunctionsMap) M.empty M.empty
 
--- TypeChecker monad
-
-type TypeCheckerM' a = WriterT [SemanticException] (StateT Store (ReaderT Env (ExceptT SemanticError IO))) a
-
--- environment helpers
+emptyEnv :: Env
+emptyEnv = Env M.empty [] Nothing Nothing Nothing (Ident "")
 
 newBlockEnv :: TypeCheckerM' Env
 newBlockEnv = do
   env <- ask
   pure env {variablesInBlock = []}
 
-updateEnvVariables :: Ident -> Declaration -> Env -> Env
-updateEnvVariables ident decl env = env {variables = M.insert ident decl (variables env)}
+-- functions / methods
 
-updateVariablesInBlock :: Ident -> Env -> Env
-updateVariablesInBlock ident env = env {variablesInBlock = ident : variablesInBlock env}
-
-addVariableToScope :: BNFC'Position -> Ident -> Type -> Env -> TypeCheckerM' Env
-addVariableToScope pos ident t env
-  | ident `elem` variablesInBlock env = do
-    let Declaration _ firstPos = variables env M.! ident
-    throwError $ RedeclarationInScope ident firstPos pos
-  | otherwise = do
-    _ <- checkExceptType tVoid t (VoidVariable (hasPosition t))
-    let updateVariablesEnv = updateVariablesInBlock ident env
-    pure $ updateEnvVariables ident (Declaration t pos) updateVariablesEnv
-
-addVariableToLocalScope :: BNFC'Position -> Ident -> Type -> TypeCheckerM' Env
-addVariableToLocalScope pos ident t = ask >>= addVariableToScope pos ident t
-
-getVariableType :: Ident -> BNFC'Position -> TypeCheckerM' Type
-getVariableType ident pos = do
-  maybeType <- reader $ M.lookup ident . variables
-  case maybeType of
-    Nothing -> throwError $ VariableNotDefined ident pos
-    Just (Declaration t _) -> pure t
-
-updateFunctions :: Ident -> Declaration -> TypeCheckerM' ()
-updateFunctions fnIdent decl = do
-  cIdent <- asks currClass
+addNewFunction :: Ident -> Ident -> Declaration -> TypeCheckerM' ()
+addNewFunction cIdent fnIdent decl = do
   fnMap <- gets functions
   let newClassMap = M.insert fnIdent decl (fnMap M.! cIdent)
   modify $ \store -> store {functions = M.insert cIdent newClassMap fnMap}
 
-addFunction :: BNFC'Position -> Ident -> Type -> TypeCheckerM' ()
-addFunction pos fnIdent t = do
-  cIdent <- asks currClass
-  maybeFunc <- gets $ \store -> M.lookup fnIdent ((functions store) M.! cIdent)
+addFunctionToClass :: Ident -> Type -> BNFC'Position -> Ident -> TypeCheckerM' ()
+addFunctionToClass fnIdent t pos cIdent = do
+  maybeFunc <- getMethod cIdent fnIdent
   case maybeFunc of
-    Nothing -> updateFunctions fnIdent (Declaration t pos)
+    Nothing -> addNewFunction cIdent fnIdent (Declaration t pos)
     Just (Declaration _ BNFC'NoPosition) -> throwError $ BuiltInRedeclaration fnIdent pos
     Just (Declaration _ firstPos) -> throwError $ RedeclarationInScope fnIdent firstPos pos
 
-getFunctionType :: Ident -> Ident -> BNFC'Position -> TypeCheckerM' Type
-getFunctionType cIdent fnIdent pos = do
-  maybeType <- gets $ \store -> M.lookup fnIdent ((functions store) M.! cIdent)
+addFunction :: Ident -> Type -> BNFC'Position -> TypeCheckerM' ()
+addFunction fnIdent t pos = asks currClass >>= addFunctionToClass fnIdent t pos
+
+getMethod :: Ident -> Ident -> TypeCheckerM' (Maybe Declaration)
+getMethod cIdent fnIdent = gets $ \store -> M.lookup fnIdent (functions store M.! cIdent)
+
+getFunction :: Ident -> TypeCheckerM' (Maybe Declaration)
+getFunction = getMethod (Ident "")
+
+getMethodOrFunction :: Ident -> Ident -> TypeCheckerM' (Maybe Declaration)
+getMethodOrFunction cIdent fnIdent = do
+  maybeDecl <- getMethod cIdent fnIdent
+  case (maybeDecl, cIdent) of
+    (Just decl, _) -> pure (Just decl)
+    (_, Ident "") -> pure Nothing
+    _ -> getFunction fnIdent
+
+getMethodType :: Ident -> Ident -> BNFC'Position -> TypeCheckerM' Type
+getMethodType cIdent fnIdent pos = do
+  maybeType <- getMethod cIdent fnIdent
+  case maybeType of
+    Nothing -> throwError $ MethodNotDefined cIdent fnIdent pos
+    Just (Declaration t _) -> pure t
+
+getFunctionType :: Ident -> BNFC'Position -> TypeCheckerM' Type
+getFunctionType fnIdent pos = do
+  cIdent <- asks currClass
+  maybeType <- getMethodOrFunction cIdent fnIdent
   case maybeType of
     Nothing -> throwError $ FunctionNotDefined fnIdent pos
     Just (Declaration t _) -> pure t
 
-updateFields :: Ident -> Declaration -> TypeCheckerM' ()
-updateFields fieldIdent decl = do
-  cIdent <- asks currClass
+-- fields
+
+addNewField :: Ident -> Ident -> Declaration -> TypeCheckerM' ()
+addNewField cIdent fieldIdent decl = do
   fieldsMap <- gets fields
   let newClassMap = M.insert fieldIdent decl (fieldsMap M.! cIdent)
   modify $ \store -> store {fields = M.insert cIdent newClassMap fieldsMap}
 
-addField :: BNFC'Position -> Ident -> Type -> TypeCheckerM' ()
-addField pos fieldIdent t = do
-  cIdent <- asks currClass
-  maybeField <- gets $ \store -> M.lookup fieldIdent ((fields store) M.! cIdent)
+getField :: Ident -> Ident -> TypeCheckerM' (Maybe Declaration)
+getField cIdent fIdent = gets $ \store -> M.lookup fIdent (fields store M.! cIdent)
+
+addFieldToClass :: Ident -> Type -> BNFC'Position -> Ident -> TypeCheckerM' ()
+addFieldToClass fieldIdent t pos cIdent = do
+  maybeField <- getField cIdent fieldIdent
   case maybeField of
-    Nothing -> updateFields fieldIdent (Declaration t pos)
+    Nothing -> addNewField cIdent fieldIdent (Declaration t pos)
     Just (Declaration _ firstPos) -> throwError $ RedeclarationInScope fieldIdent firstPos pos
+
+addField :: Ident -> Type -> BNFC'Position -> TypeCheckerM' ()
+addField fieldIdent t pos = asks currClass >>= addFieldToClass fieldIdent t pos
 
 getFieldType :: Ident -> Ident -> BNFC'Position -> TypeCheckerM' Type
 getFieldType cIdent fieldIdent pos = do
-  maybeType <- gets $ \store -> M.lookup fieldIdent ((fields store) M.! cIdent)
+  maybeType <- getField cIdent fieldIdent
   case maybeType of
     Nothing -> throwError $ PropertyNotExisting fieldIdent pos
     Just (Declaration t _) -> pure t
 
-getParentIdent :: Ident -> TypeCheckerM' (Maybe Ident)
-getParentIdent cIdent = gets $ M.lookup cIdent . parents
-
-addExpRetTypeToLocalScope :: Type -> TypeCheckerM' Env
-addExpRetTypeToLocalScope t = do
-  env <- ask
-  pure $ env {expRetType = Just t}
-
-addExpItemTypeToLocalScope :: Type -> TypeCheckerM' Env
-addExpItemTypeToLocalScope t = do
-  env <- ask
-  pure $ env {expItemType = Just t}
-
-addRetTypeToLocalScope :: Type -> TypeCheckerM' Env
-addRetTypeToLocalScope t = do
-  env <- ask
-  pure $ env {retType = Just t}
-
-addCurrClass :: Ident -> TypeCheckerM' Env
-addCurrClass ident = do
-  modify $ \store -> store {functions = M.insert ident M.empty (functions store)}
-  modify $ \store -> store {fields = M.insert ident M.empty (fields store)}
-  env <- ask
-  pure $ env {currClass = ident}
-
-getCurrClass :: TypeCheckerM' Ident
-getCurrClass = asks currClass
-
-prepareClassChecks :: Ident -> TypeCheckerM' Env
-prepareClassChecks ident = do
-  env <- ask
-  classFields <- gets $ \store -> (fields store) M.! ident
-  pure $ env {currClass = ident, variables = classFields, variablesInBlock = M.keys classFields}
-
-mergeParentClass :: Ident -> Ident -> TypeCheckerM' ()
-mergeParentClass cIdent pIdent = do
-  st <- get
-  let stFields = fields st
-  let stFunctions = functions st
-  let fnInter = M.intersection (stFunctions M.! cIdent) (stFunctions M.! pIdent)
-  when (M.size fnInter > 0) (throwError $ CustomError "duplication of fun" BNFC'NoPosition ) -- todo: change to proper err
-  let newFnMap = M.union (stFunctions M.! cIdent) (stFunctions M.! pIdent)
-  let fieldInter = M.intersection (stFields M.! cIdent) (stFields M.! pIdent)
-  when (M.size fieldInter > 0) (throwError $  CustomError "duplication of field" BNFC'NoPosition ) -- todo: change to proper err
-  let newFieldMap = M.union (stFields M.! cIdent) (stFields M.! pIdent)
-  modify $ \store -> store {functions = M.insert cIdent newFnMap (functions store), fields = M.insert cIdent newFieldMap (fields store)}
+-- classes' parents
 
 addClassParent :: Ident -> Maybe Ident -> TypeCheckerM' ()
 addClassParent cIdent (Just pIdent) = modify $ \store -> store {parents = M.insert cIdent pIdent (parents store)}
 addClassParent _ _ = pure ()
 
+getParentIdent :: Ident -> TypeCheckerM' (Maybe Ident)
+getParentIdent cIdent = gets $ M.lookup cIdent . parents
+
+-- variables
+
+addVariableToEnv :: Ident -> Declaration -> Env -> Env
+addVariableToEnv ident decl env = env {
+    variables = M.insert ident decl (variables env),
+    variablesInBlock = ident : variablesInBlock env
+  }
+
+addVariableToScope :: Ident -> Type -> BNFC'Position -> Env -> TypeCheckerM' Env
+addVariableToScope ident t pos env
+  | ident `elem` variablesInBlock env = do
+    let Declaration _ firstPos = variables env M.! ident
+    throwError $ RedeclarationInScope ident firstPos pos
+  | otherwise = do
+    when (compareTypes tVoid t) (throwError $ VoidVariable (hasPosition t))
+    pure $ addVariableToEnv ident (Declaration t pos) env
+
+addVariableToLocalScope :: Ident -> Type -> BNFC'Position -> TypeCheckerM' Env
+addVariableToLocalScope ident t pos = ask >>= addVariableToScope ident t pos
+
+getVariable :: Ident -> TypeCheckerM' (Maybe Declaration)
+getVariable ident = reader $ M.lookup ident . variables
+
+getVariableOrField :: Ident -> Ident -> TypeCheckerM' (Maybe Declaration)
+getVariableOrField cIdent fieldIdent = do
+  maybeDecl <- getVariable fieldIdent
+  case (maybeDecl, cIdent) of
+    (Just decl, _) -> pure (Just decl)
+    (_, Ident "") -> pure Nothing
+    _ -> getField cIdent fieldIdent
+
+getVariableType :: Ident -> BNFC'Position -> TypeCheckerM' Type
+getVariableType ident pos = do
+  cIdent <- asks currClass
+  maybeType <- getVariableOrField cIdent ident
+  case maybeType of
+    Just (Declaration t _) -> pure t
+    Nothing -> throwError $ VariableNotDefined ident pos
+
+-- expected / returned type
+
+addExpRetType :: Type -> TypeCheckerM' Env
+addExpRetType t = do
+  env <- ask
+  pure $ env {expRetType = Just t}
+
+addExpItemType :: Type -> TypeCheckerM' Env
+addExpItemType t = do
+  env <- ask
+  pure $ env {expItemType = Just t}
+
+addRetType :: Type -> TypeCheckerM' Env
+addRetType t = do
+  env <- ask
+  pure $ env {retType = Just t}
+
+-- current class
+
+addCurrClass :: Ident -> TypeCheckerM' Env
+addCurrClass ident = do
+  env <- ask
+  pure $ env {currClass = ident}
+
+addNewCurrClass :: Ident -> TypeCheckerM' Env
+addNewCurrClass ident = do
+  modify $ \store -> store {functions = M.insert ident M.empty (functions store)}
+  modify $ \store -> store {fields = M.insert ident M.empty (fields store)}
+  addCurrClass ident
+
+getCurrClass :: TypeCheckerM' Ident
+getCurrClass = asks currClass
+
+-- resolve classes' inheritances
+
 resolveClassesInheritances :: TypeCheckerM' ()
 resolveClassesInheritances = do
-  storeMap <- gets fields
-  let visitMap = M.fromList (map (, 0) (M.keys storeMap))
-  foldM_ (flip resolveClassInheritance) visitMap (M.keys storeMap)
+  classesList <- gets $ M.keys . fields
+  let visitMap = M.fromList (map (, 0) classesList) -- values meaning: 0 - undone; 1 - visited, not done; 2 - done
+  foldM_ resolveClassInheritance visitMap classesList
 
--- 0 - undone; 1 - visited, not done; 2 - done
-resolveClassInheritance :: Ident -> M.Map Ident Int -> TypeCheckerM' (M.Map Ident Int)
-resolveClassInheritance cIdent visitMap = case visitMap M.! cIdent of
+resolveClassInheritance :: M.Map Ident Int -> Ident -> TypeCheckerM' (M.Map Ident Int)
+resolveClassInheritance visitMap cIdent = case visitMap M.! cIdent of
   2 -> return visitMap
   1 -> throwError $ InheritanceCycle cIdent BNFC'NoPosition
   0 -> do
     maybeParent <- getParentIdent cIdent
-    case maybeParent of
-      Nothing -> return (M.insert cIdent 2 visitMap)
-      Just pIdent -> do
-        newVisitMap <- resolveClassInheritance pIdent (M.insert cIdent 1 visitMap)
-        mergeParentClass cIdent pIdent
-        return (M.insert cIdent 2 newVisitMap)
-  _ -> throwError $  CustomError "strange val in map" BNFC'NoPosition
+    newVisitMap <- executeClassInheritance visitMap cIdent maybeParent
+    return $ M.insert cIdent 2 newVisitMap
+  _ -> undefined
+
+executeClassInheritance :: M.Map Ident Int -> Ident -> Maybe Ident -> TypeCheckerM' (M.Map Ident Int)
+executeClassInheritance visitMap _ Nothing = return visitMap
+executeClassInheritance visitMap cIdent (Just pIdent) = do
+  newVisitMap <- resolveClassInheritance (M.insert cIdent 1 visitMap) pIdent
+  mergeParentClass cIdent pIdent
+  return newVisitMap
+
+mergeParentClass :: Ident -> Ident -> TypeCheckerM' ()
+mergeParentClass cIdent pIdent = do
+  store <- get
+  mapM_ (\(i, Declaration t p) -> addFunctionToClass i t p cIdent) (M.toList (functions store M.! pIdent))
+  mapM_ (\(i, Declaration t p) -> addFieldToClass i t p cIdent) (M.toList (fields store M.! pIdent))
 
 
--- Type helpers
+-- miscellaneous
 
+-- todo: fix that code :)
 getCompType :: Type -> Type -> SemanticError -> TypeCheckerM' (Maybe Type)
 getCompType expType evalType err
   | compareTypes expType evalType = pure $ Just evalType
@@ -226,9 +272,6 @@ getCompType expType evalType err
           Just pIdent -> getCompType expType (Class BNFC'NoPosition pIdent) err
           _ -> throwError err
       _ -> throwError err
-
-checkExceptType :: Type -> Type -> SemanticError -> TypeCheckerM' ()
-checkExceptType expType t err = if compareTypes expType t then throwError err else pure ()
 
 printWarning :: SemanticException -> TypeCheckerM' ()
 printWarning e = tell [e]

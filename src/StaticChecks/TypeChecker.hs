@@ -32,7 +32,7 @@ checkProgram (Prog _ topDefs) = do
 
 checkMainDeclaration :: TypeCheckerM' ()
 checkMainDeclaration = do
-  mainType <- getFunctionType (Ident "") (Ident "main") BNFC'NoPosition
+  mainType <- getFunctionType (Ident "main") BNFC'NoPosition
   case mainType of
     Fun _ (Int _) [] -> pure ()
     Fun pos _ _ -> throwError $ WrongMainDeclaration pos
@@ -47,18 +47,18 @@ saveTopDef (ClassTopDef _ classDef) = saveClassDef classDef
 saveFnDef :: FnDef -> TypeCheckerM' ()
 saveFnDef (FunDef pos t ident args _) = do
   let mappedArgs = map argType args
-  addFunction pos ident (Fun pos t mappedArgs)
+  addFunction ident (Fun pos t mappedArgs) pos
 
 saveClassDef :: ClassDef -> TypeCheckerM' ()
 saveClassDef cls = do
   let cIdent = className cls
   _ <- addClassParent cIdent (classParent cls)
-  newEnv <- addCurrClass cIdent
+  newEnv <- addNewCurrClass cIdent
   local (const newEnv) (mapM_ saveCStmt (classBody cls))
 
 saveCStmt :: CStmt -> TypeCheckerM' ()
 saveCStmt (MethodDef _ fnDef) = saveFnDef fnDef
-saveCStmt (FieldDef pos fieldType fieldIdent) = addField pos fieldIdent fieldType
+saveCStmt (FieldDef pos fieldType fieldIdent) = addField fieldIdent fieldType pos
 
 checkTopDef :: TopDef -> TypeCheckerM' ()
 checkTopDef (FnTopDef _ fnDef) = checkFnDef fnDef
@@ -66,7 +66,7 @@ checkTopDef (ClassTopDef _ classDef) = checkClassDef classDef
 
 checkFnDef :: FnDef -> TypeCheckerM' ()
 checkFnDef (FunDef pos t ident args (SBlock _ stmts)) = do
-  newEnv <- addExpRetTypeToLocalScope t
+  newEnv <- addExpRetType t
   blockEnv <- resolveDefArgs args newEnv
   evaluated <- local (const blockEnv) (checkStmtsListType stmts)
   case evaluated of
@@ -75,7 +75,7 @@ checkFnDef (FunDef pos t ident args (SBlock _ stmts)) = do
 
 checkClassDef :: ClassDef -> TypeCheckerM' ()
 checkClassDef cls = do
-  newEnv <- prepareClassChecks (className cls)
+  newEnv <- addCurrClass (className cls)
   local (const newEnv) (mapM_ checkCStmt (classBody cls))
 
 checkCStmt :: CStmt -> TypeCheckerM' ()
@@ -94,7 +94,7 @@ checkStmtsListType :: [Stmt] -> TypeCheckerM' (Maybe Type)
 checkStmtsListType [] = asks retType
 
 checkStmtsListType ((Decl _ t items) : xs) = do
-  localEnv <- addExpItemTypeToLocalScope t
+  localEnv <- addExpItemType t
   updatedEnv <- foldM (\env item -> local (const env) (addDeclItemToEnv item)) localEnv items
   local (const updatedEnv) (checkStmtsListType xs)
   
@@ -103,7 +103,7 @@ checkStmtsListType (x : xs) = do
   alreadyEvaluated <- asks retType
   env <- case (alreadyEvaluated, evaluated) of
     (Just _, _) -> printWarning (StmtsNeverReached (hasPosition x)) >> ask
-    (Nothing, Just t) -> addRetTypeToLocalScope t
+    (Nothing, Just t) -> addRetType t
     (_, _) -> ask
   local (const env) (checkStmtsListType xs)
 
@@ -113,12 +113,12 @@ addDeclItemToEnv :: Item -> TypeCheckerM' Env
 
 addDeclItemToEnv (NoInit pos ident) = do
   (Just t) <- asks expItemType
-  addVariableToLocalScope pos ident t
+  addVariableToLocalScope ident t pos
   
 addDeclItemToEnv (Init pos ident expr) = do
   (Just t) <- asks expItemType
   _ <- getCheckExprType expr t
-  addVariableToLocalScope pos ident t
+  addVariableToLocalScope ident t pos
 
 -- 'Stmt' level checks
 
@@ -216,7 +216,7 @@ getExprType (EFieldGet pos itemExpr ident) = do
 
 getExprType (EMethod pos itemExpr methodIdent exprs) = do
   (Class _ classIdent) <- getExprType itemExpr
-  Fun _ t args <- getFunctionType classIdent methodIdent pos
+  Fun _ t args <- getMethodType classIdent methodIdent pos
   resolveAppArgs pos args exprs
   pure t
 
@@ -255,7 +255,7 @@ getExprType (ERel _ e1 op e2) = do
 
 getExprType (EApp pos ident exprs) = do
   when (ident == Ident "main") (throwError $ WrongMainCall pos)
-  Fun _ t args <- getFunctionType (Ident "") ident pos
+  Fun _ t args <- getFunctionType ident pos
   resolveAppArgs pos args exprs
   pure t
 
@@ -271,8 +271,7 @@ resolveDefArgs [] env = pure env
 resolveDefArgs (x : xs) env = resolveDefArg x env >>= resolveDefArgs xs
 
 resolveDefArg :: Arg -> Env -> TypeCheckerM' Env
-resolveDefArg (FunArg pos t ident) env = do
-  addVariableToScope pos ident t env
+resolveDefArg (FunArg pos t ident) env = addVariableToScope ident t pos env
 
 getCheckExprType :: Expr -> Type -> TypeCheckerM' (Maybe Type)
 getCheckExprType expr (Void _) = throwError $ WrongExpressionType (hasPosition expr)
