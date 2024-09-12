@@ -181,10 +181,14 @@ checkStmtType (While pos expr stmt) = do
     (_, _) -> pure Nothing
 
 -- todo: what if arr.length = 0 ???
+-- return only viable if arr.length is well-known
 checkStmtType (ForEach pos t elIdent arrExpr stmt) = do
   (Arr _ arrType) <- getExprType arrExpr -- make it better error for the user
   _ <- getCompType arrType t ( WrongVariableType (hasPosition t))
-  checkBlockType (SBlock (hasPosition stmt) [(Decl pos t [NoInit pos elIdent]), stmt])
+  let elStmt = Decl pos t [NoInit pos elIdent]
+  case stmt of
+    BStmt _ (SBlock bPos stmts) -> checkBlockType (SBlock bPos (elStmt : stmts))
+    _ -> checkBlockType (SBlock (hasPosition stmt) [elStmt, stmt])
 
 checkStmtType (SExp _ expr) = getExprType expr >> pure Nothing
 
