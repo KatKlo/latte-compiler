@@ -257,11 +257,13 @@ getExprType (EAdd _ e1 _ e2) = do
     then getCheckExprType e2 t1 <&> fromJust
     else throwError $ WrongExpressionType (hasPosition e1)
 
-getExprType (ERel _ e1 op e2) = do
+getExprType (ERel pos e1 op e2) = do
   t1 <- getExprType e1
-  if relType op t1
-    then getCheckExprType e2 t1 >> pure tBool
-    else throwError $ WrongExpressionType (hasPosition e1)
+  t2 <- getExprType e2
+  maybeFinalType <- compareCastingBothWays t1 t2
+  case maybeFinalType of
+    Just t -> if relType op t then pure tBool else throwError $ WrongExpressionType (hasPosition e1)
+    Nothing -> throwError $ DiffOperandTypes t1 t2 pos
   where
     relType :: RelOp -> Type -> Bool
     relType (EQU _) = isEqType

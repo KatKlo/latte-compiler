@@ -73,8 +73,9 @@ compareTypes (Bool _) (Bool _) = True
 compareTypes (Void _) (Void _) = True
 compareTypes (Arr _ t1) (Arr _ t2) = compareTypes t1 t2
 compareTypes (Class _ s1) (Class _ s2) = s1 == s2
-compareTypes (Ref _ _) t2 = isRefType t2
-compareTypes t1 (Ref _ _) = isRefType t1
+compareTypes (Ref _ (Void _)) t2 = isRefType t2
+compareTypes t1 (Ref _ (Void _)) = isRefType t1
+compareTypes (Ref _ t1) (Ref _ t2) = compareTypes t1 t2
 compareTypes _ _ = False
 
 instantBoolExprValue :: Expr -> Maybe Bool

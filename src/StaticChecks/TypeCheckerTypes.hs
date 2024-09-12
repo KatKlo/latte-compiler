@@ -12,6 +12,7 @@ import Grammar.AbsLatte
 import Control.Monad
 import StaticChecks.Errors
 import StaticChecks.GrammarUtils
+import GHC.Base ((<|>))
 
 -- TypeChecker monad
 
@@ -200,16 +201,19 @@ getVariableType ident pos = do
 
 addExpRetType :: Type -> TypeCheckerM' Env
 addExpRetType t = do
+  _ <- checkTypeReturnValidity t (hasPosition t)
   env <- ask
   pure $ env {expRetType = Just t}
 
 addExpItemType :: Type -> TypeCheckerM' Env
 addExpItemType t = do
+--  _ <- checkTypeValidity t (hasPosition t) -- unnecessary as it is checked while saving this var
   env <- ask
   pure $ env {expItemType = Just t}
 
 addRetType :: Type -> TypeCheckerM' Env
 addRetType t = do
+  _ <- checkTypeReturnValidity t (hasPosition t)
   env <- ask
   pure $ env {retType = Just t}
 
@@ -266,16 +270,37 @@ mergeParentClass cIdent pIdent = do
 
 -- todo: fix that code :)
 getCompType :: Type -> Type -> SemanticError -> TypeCheckerM' (Maybe Type)
-getCompType expType evalType err
-  | compareTypes expType evalType = pure $ Just evalType
+getCompType expType evalType err = do
+  maybeRes <- compareTypesWithCasting expType evalType
+  case maybeRes of
+    Just _ -> pure maybeRes
+    _ -> throwError err
+
+compareTypesWithCasting :: Type -> Type -> TypeCheckerM' (Maybe Type)
+compareTypesWithCasting expType evalType
+  | compareTypes expType evalType = pure $ Just expType
   | otherwise = do
     case (expType, evalType) of
+      (Ref _ t1, Ref _ t2) -> compareTypesWithCasting t1 t2
+      (_, Ref _ t) -> compareTypesWithCasting expType t
       (Class _ _, Class _ evalIdent) -> do
         maybeParent <- getParentIdent evalIdent
         case maybeParent of
-          Just pIdent -> getCompType expType (Class BNFC'NoPosition pIdent) err
-          _ -> throwError err
-      _ -> throwError err
+          Just pIdent -> compareTypesWithCasting expType (Class BNFC'NoPosition pIdent)
+          _ -> pure Nothing
+      _ -> pure Nothing
+
+compareCastingBothWays :: Type -> Type -> TypeCheckerM' (Maybe Type)
+compareCastingBothWays t1 t2 = do
+  maybeRes1 <- compareTypesWithCasting t1 t2
+  case maybeRes1 of
+    Just _ -> pure maybeRes1
+    _ -> compareTypesWithCasting t2 t1
+
+checkTypeReturnValidity :: Type -> BNFC'Position -> TypeCheckerM' ()
+checkTypeReturnValidity (Void _) _ = pure ()
+checkTypeReturnValidity (Ref _ t) pos = checkTypeReturnValidity t pos
+checkTypeReturnValidity t pos = checkTypeValidity t pos
 
 checkTypeValidity :: Type -> BNFC'Position -> TypeCheckerM' ()
 checkTypeValidity Int {} _ = pure ()

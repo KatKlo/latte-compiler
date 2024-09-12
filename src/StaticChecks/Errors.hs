@@ -27,6 +27,7 @@ data SemanticError' a
   | PropertyNotExisting Ident a
   | InheritanceCycle Ident a
   | OperationImpossible a
+  | DiffOperandTypes Type Type a
   | CustomError String a
   | UnknownSemanticError a
 
@@ -71,6 +72,8 @@ instance Show SemanticError where
       "SEMANTIC ERROR: Classes inheritance cycle with '" ++ name ++ "'"
   show (OperationImpossible pos) =
     "SEMANTIC ERROR: Cannot execute operation" ++ showPos pos
+  show (DiffOperandTypes t1 t2 pos) =
+    "SEMANTIC ERROR: Different types of operands (" ++ show t1 ++ ", " ++ show t2 ++ ")" ++ showPos pos
   show (CustomError s _) =
     "SEMANTIC ERROR: Custom error: " ++ s
   show (UnknownSemanticError pos) =
