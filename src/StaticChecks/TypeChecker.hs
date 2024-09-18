@@ -72,7 +72,7 @@ checkFnDef (FunDef pos t ident args (SBlock _ stmts)) = do
   evaluated <- local (const blockEnv) (checkStmtsListType stmts)
   case evaluated of
     Just _ -> pure ()
-    Nothing -> getCompType tVoid t (NoReturnStmt ident pos) >> pure ()
+    Nothing -> compareCastingEvalType tVoid t (NoReturnStmt ident pos) >> pure ()
 
 checkClassDef :: ClassDef -> TypeCheckerM' ()
 checkClassDef cls = do
@@ -157,7 +157,7 @@ checkStmtType (Ret _ expr) = do
   getCheckExprType expr t
 checkStmtType (VRet pos) = do
   Just t <- asks expRetType
-  getCompType tVoid t (WrongReturnType pos)
+  compareCastingEvalType tVoid t (WrongReturnType pos)
 
 checkStmtType (Cond pos expr s1) = checkStmtType (CondElse pos expr s1 (Empty pos))
 checkStmtType (CondElse _ expr s1 s2) = do
@@ -180,15 +180,16 @@ checkStmtType (While pos expr stmt) = do
     (Just True, Just _) -> pure ret
     (_, _) -> pure Nothing
 
--- todo: what if arr.length = 0 ???
--- return only viable if arr.length is well-known
 checkStmtType (ForEach pos t elIdent arrExpr stmt) = do
-  (Arr _ arrType) <- getExprType arrExpr -- make it better error for the user
-  _ <- getCompType arrType t ( WrongVariableType (hasPosition t))
+  evaluatedArrExpr <- getExprType arrExpr
+  _ <- case evaluatedArrExpr of
+    Arr _ elType -> compareCastingEvalType t elType (WrongVariableType (hasPosition t))
+    _ -> throwError $ ExpectedArrType (hasPosition arrExpr)
   let elStmt = Decl pos t [NoInit pos elIdent]
-  case stmt of
+  _ <- case stmt of
     BStmt _ (SBlock bPos stmts) -> checkBlockType (SBlock bPos (elStmt : stmts))
     _ -> checkBlockType (SBlock (hasPosition stmt) [elStmt, stmt])
+  pure Nothing -- todo: if arr.length > 0 then return computed better
 
 checkStmtType (SExp _ expr) = getExprType expr >> pure Nothing
 
@@ -294,7 +295,7 @@ getCheckExprType :: Expr -> Type -> TypeCheckerM' (Maybe Type)
 getCheckExprType expr (Void _) = throwError $ WrongExpressionType (hasPosition expr)
 getCheckExprType expr expected = do
   evaluated <- getExprType expr
-  getCompType expected evaluated (WrongExpressionType (hasPosition expr))
+  compareCastingEvalType expected evaluated (WrongExpressionType (hasPosition expr))
 
 -- helpers
 

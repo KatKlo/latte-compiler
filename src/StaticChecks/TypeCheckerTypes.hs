@@ -268,34 +268,44 @@ mergeParentClass cIdent pIdent = do
 
 -- miscellaneous
 
--- todo: fix that code :)
-getCompType :: Type -> Type -> SemanticError -> TypeCheckerM' (Maybe Type)
-getCompType expType evalType err = do
-  maybeRes <- compareTypesWithCasting expType evalType
+compareCastingEvalType :: Type -> Type -> SemanticError -> TypeCheckerM' (Maybe Type)
+compareCastingEvalType expType evalType err = do
+  maybeRes <- compareAndGetTypes expType evalType
   case maybeRes of
     Just _ -> pure maybeRes
     _ -> throwError err
 
-compareTypesWithCasting :: Type -> Type -> TypeCheckerM' (Maybe Type)
-compareTypesWithCasting expType evalType
-  | compareTypes expType evalType = pure $ Just expType
+compareAndGetTypes :: Type -> Type -> TypeCheckerM' (Maybe Type)
+compareAndGetTypes expType (Ref _ (Void _)) =  if isRefType expType then pure $ Just expType else pure Nothing
+compareAndGetTypes (Ref _ expType) evalType = compareAndGetTypes expType evalType
+compareAndGetTypes expType (Ref _ evalType) = compareAndGetTypes expType evalType
+compareAndGetTypes expType evalType = compareTypesWithoutNull expType evalType
+
+compareTypesWithoutNull :: Type -> Type -> TypeCheckerM' (Maybe Type)
+compareTypesWithoutNull (Ref _ _) _ = undefined -- should never happen
+compareTypesWithoutNull _ (Ref _ _) = undefined -- should never happen
+compareTypesWithoutNull expType@(Class _ expIdent) (Class _ evalIdent) = do
+  classesMatch <- compareClassTypes expIdent evalIdent
+  if classesMatch then pure $ Just expType else pure Nothing
+compareTypesWithoutNull expType evalType
+  | basicCompareTypes expType evalType = pure $ Just expType
+  | otherwise = pure Nothing
+
+compareClassTypes :: Ident -> Ident -> TypeCheckerM' Bool
+compareClassTypes expIdent evalIdent
+  | expIdent == evalIdent = pure True
   | otherwise = do
-    case (expType, evalType) of
-      (Ref _ t1, Ref _ t2) -> compareTypesWithCasting t1 t2
-      (_, Ref _ t) -> compareTypesWithCasting expType t
-      (Class _ _, Class _ evalIdent) -> do
-        maybeParent <- getParentIdent evalIdent
-        case maybeParent of
-          Just pIdent -> compareTypesWithCasting expType (Class BNFC'NoPosition pIdent)
-          _ -> pure Nothing
-      _ -> pure Nothing
+    maybeParent <- getParentIdent evalIdent
+    case maybeParent of
+      Just pIdent -> compareClassTypes expIdent pIdent
+      _ -> pure False
 
 compareCastingBothWays :: Type -> Type -> TypeCheckerM' (Maybe Type)
 compareCastingBothWays t1 t2 = do
-  maybeRes1 <- compareTypesWithCasting t1 t2
+  maybeRes1 <- compareAndGetTypes t1 t2
   case maybeRes1 of
     Just _ -> pure maybeRes1
-    _ -> compareTypesWithCasting t2 t1
+    _ -> compareAndGetTypes t2 t1
 
 checkTypeReturnValidity :: Type -> BNFC'Position -> TypeCheckerM' ()
 checkTypeReturnValidity (Void _) _ = pure ()

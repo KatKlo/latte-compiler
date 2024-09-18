@@ -66,18 +66,14 @@ isAssignExpr _ = False
 
 -- miscellaneous
 
-compareTypes :: Type -> Type -> Bool
-compareTypes (Int _) (Int _) = True
-compareTypes (Str _) (Str _) = True
-compareTypes (Bool _) (Bool _) = True
-compareTypes (Void _) (Void _) = True
-compareTypes (Arr _ t1) (Arr _ t2) = compareTypes t1 t2
-compareTypes (Class _ s1) (Class _ s2) = s1 == s2
-compareTypes (Ref _ (Void _)) t2 = isRefType t2
-compareTypes t1 (Ref _ (Void _)) = isRefType t1
-compareTypes (Ref _ t1) t2 = compareTypes t1 t2
-compareTypes t1 (Ref _ t2) = compareTypes t1 t2
-compareTypes _ _ = False
+basicCompareTypes :: Type -> Type -> Bool
+basicCompareTypes (Int _) (Int _) = True
+basicCompareTypes (Str _) (Str _) = True
+basicCompareTypes (Bool _) (Bool _) = True
+basicCompareTypes (Void _) (Void _) = True
+basicCompareTypes (Arr _ t1) (Arr _ t2) = basicCompareTypes t1 t2
+basicCompareTypes (Class _ s1) (Class _ s2) = s1 == s2
+basicCompareTypes _ _ = False
 
 instantBoolExprValue :: Expr -> Maybe Bool
 instantBoolExprValue (ELitTrue _) = Just True
