@@ -138,18 +138,18 @@ checkStmtType (BStmt _ block) = checkBlockType block
 checkStmtType Decl {} = pure Nothing -- checked in block
 
 checkStmtType (Ass pos itemExpr expr) = do
-  unless (isAssignExpr itemExpr) (throwError $ OperationImpossible pos)
   expected <- getExprType itemExpr
   _ <- getCheckExprType expr expected
+  _ <- checkExprMutability itemExpr pos
   pure Nothing
 
 checkStmtType (Incr pos itemExpr) = do
-  unless (isAssignExpr itemExpr) (throwError $ OperationImpossible pos)
   _ <- getCheckExprType itemExpr tInt
+  _ <- checkExprMutability itemExpr pos
   pure Nothing
 checkStmtType (Decr pos itemExpr) = do
-  unless (isAssignExpr itemExpr) (throwError $ OperationImpossible pos)
   _ <- getCheckExprType itemExpr tInt
+  _ <- checkExprMutability itemExpr pos
   pure Nothing
 
 checkStmtType (Ret _ expr) = do
@@ -296,6 +296,17 @@ getCheckExprType expr (Void _) = throwError $ WrongExpressionType (hasPosition e
 getCheckExprType expr expected = do
   evaluated <- getExprType expr
   compareCastingEvalType expected evaluated (WrongExpressionType (hasPosition expr))
+
+checkExprMutability :: Expr -> BNFC'Position -> TypeCheckerM' ()
+checkExprMutability EVar {} _ = pure ()
+checkExprMutability EArrGet {} _ = pure ()
+checkExprMutability (EFieldGet _ itemExpr (Ident "length")) pos = do
+  itemType <- getExprType itemExpr
+  case itemType of
+   (Arr _ _) -> throwError $ OperationImpossible pos
+   _ -> pure ()
+checkExprMutability EFieldGet {} _ = pure ()
+checkExprMutability expr pos = throwError $ OperationImpossible pos
 
 -- helpers
 

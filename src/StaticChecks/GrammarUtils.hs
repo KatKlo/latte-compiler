@@ -57,13 +57,6 @@ isRefType Arr {} = True
 isRefType Ref {} = True
 isRefType _ = False
 
--- todo: fix asigning to arr.length
-isAssignExpr :: Expr -> Bool
-isAssignExpr EVar {} = True
-isAssignExpr EArrGet {} = True
-isAssignExpr EFieldGet {} = True
-isAssignExpr _ = False
-
 -- miscellaneous
 
 basicCompareTypes :: Type -> Type -> Bool
