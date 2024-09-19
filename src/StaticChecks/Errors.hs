@@ -24,10 +24,12 @@ data SemanticError' a
   | WrongReturnType a
   | WrongMainCall a
   | ExpectedArrType a
+  | ExpectedClassType a
   | PropertyNotExisting Ident a
   | InheritanceCycle Ident a
   | OperationImpossible a
   | DiffOperandTypes Type Type a
+  | NotAllowedOutsideClass a
   | CustomError String a
   | UnknownSemanticError a
 
@@ -66,6 +68,8 @@ instance Show SemanticError where
     "SEMANTIC ERROR: Wrong main call" ++ showPos pos
   show (ExpectedArrType pos) =
     "SEMANTIC ERROR: Expected array type" ++ showPos pos
+  show (ExpectedClassType pos) =
+    "SEMANTIC ERROR: Expected class type" ++ showPos pos
   show (PropertyNotExisting (Ident name) pos) =
       "SEMANTIC ERROR: Property '" ++ name ++ "' not existing" ++ showPos pos
   show (InheritanceCycle (Ident name) _) =
@@ -74,6 +78,8 @@ instance Show SemanticError where
     "SEMANTIC ERROR: Cannot execute operation" ++ showPos pos
   show (DiffOperandTypes t1 t2 pos) =
     "SEMANTIC ERROR: Different types of operands (" ++ show t1 ++ ", " ++ show t2 ++ ")" ++ showPos pos
+  show (NotAllowedOutsideClass pos) =
+    "SEMANTIC ERROR: Operation not allowed outside of a class definition" ++ showPos pos
   show (CustomError s _) =
     "SEMANTIC ERROR: Custom error: " ++ s
   show (UnknownSemanticError pos) =

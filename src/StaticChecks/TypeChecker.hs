@@ -189,7 +189,7 @@ checkStmtType (ForEach pos t elIdent arrExpr stmt) = do
   _ <- case stmt of
     BStmt _ (SBlock bPos stmts) -> checkBlockType (SBlock bPos (elStmt : stmts))
     _ -> checkBlockType (SBlock (hasPosition stmt) [elStmt, stmt])
-  pure Nothing -- todo: if arr.length > 0 then return computed better
+  pure Nothing
 
 checkStmtType (SExp _ expr) = getExprType expr >> pure Nothing
 
@@ -199,7 +199,7 @@ getExprType :: Expr -> TypeCheckerM' Type
 
 getExprType (EVar pos ident) = getVariableType ident pos
 getExprType (ESelf pos) = do
-  cIdent <- getCurrClass  -- todo: what if not in class?
+  cIdent <- getCheckCurrClass pos
   pure $ Class pos cIdent
 
 getExprType (ELitInt pos num) = if isInt num then pure tInt else throwError $ IntOutOfBound num pos
@@ -212,13 +212,13 @@ getExprType (ENull pos) = pure $ Ref pos tVoid
 
 getExprType (ENewArr pos t expr) = do
   _ <- checkTypeValidity t pos
-  _ <- getCheckExprType expr tInt -- todo: maybe check if expr > 0 ?
+  _ <- getCheckExprType expr tInt
   pure $ Arr pos t
 
 getExprType (ENewObj pos t@(Class _ _)) = do
   _ <- checkTypeValidity t pos
   pure t
-getExprType (ENewObj _ _) = undefined -- todo: throw an error?
+getExprType (ENewObj pos _) = throwError $ ExpectedClassType pos
 
 getExprType (EArrGet pos arrExpr idExpr) = do
   _ <- getCheckExprType idExpr tInt
@@ -306,7 +306,7 @@ checkExprMutability (EFieldGet _ itemExpr (Ident "length")) pos = do
    (Arr _ _) -> throwError $ OperationImpossible pos
    _ -> pure ()
 checkExprMutability EFieldGet {} _ = pure ()
-checkExprMutability expr pos = throwError $ OperationImpossible pos
+checkExprMutability _ pos = throwError $ OperationImpossible pos
 
 -- helpers
 

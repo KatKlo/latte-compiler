@@ -12,7 +12,6 @@ import Grammar.AbsLatte
 import Control.Monad
 import StaticChecks.Errors
 import StaticChecks.GrammarUtils
-import GHC.Base ((<|>))
 
 -- TypeChecker monad
 
@@ -137,7 +136,7 @@ addFieldToClass fieldIdent t pos cIdent = do
 addField :: Ident -> Type -> BNFC'Position -> TypeCheckerM' ()
 addField fieldIdent t pos = do
   _ <- checkTypeValidity t pos
-  currCl <- asks currClass
+  currCl <- getCheckCurrClass pos
   addFieldToClass fieldIdent t pos currCl
 
 getFieldType :: Ident -> Ident -> BNFC'Position -> TypeCheckerM' Type
@@ -207,7 +206,7 @@ addExpRetType t = do
 
 addExpItemType :: Type -> TypeCheckerM' Env
 addExpItemType t = do
---  _ <- checkTypeValidity t (hasPosition t) -- unnecessary as it is checked while saving this var
+  _ <- checkTypeValidity t (hasPosition t) -- unnecessary as it is checked while saving this var
   env <- ask
   pure $ env {expItemType = Just t}
 
@@ -231,8 +230,10 @@ addNewClassDef ident = do
   modify $ \store -> store {functions = M.insert ident M.empty (functions store)}
   modify $ \store -> store {fields = M.insert ident M.empty (fields store)}
 
-getCurrClass :: TypeCheckerM' Ident
-getCurrClass = asks currClass
+getCheckCurrClass :: BNFC'Position -> TypeCheckerM' Ident
+getCheckCurrClass pos = do
+  ident <- asks currClass
+  if ident == Ident "" then throwError $ NotAllowedOutsideClass pos else pure ident 
 
 -- resolve classes' inheritances
 
@@ -319,7 +320,7 @@ checkTypeValidity Bool {} _ = pure ()
 checkTypeValidity (Void _ ) pos = throwError $ VoidNotAllowed pos
 checkTypeValidity (Arr _ t) pos = checkTypeValidity t pos
 checkTypeValidity (Class _ ident) pos = checkClassValidity ident pos
-checkTypeValidity _ _ = undefined -- should not happen
+checkTypeValidity _ _ = undefined -- should never happen
 
 checkClassValidity :: Ident -> BNFC'Position -> TypeCheckerM' ()
 checkClassValidity ident pos = do
