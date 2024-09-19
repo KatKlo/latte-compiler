@@ -2,6 +2,8 @@ module Main (main) where
 
 import Grammar.AbsLatte (Program)
 import Grammar.ParLatte (myLexer, pProgram)
+import Grammar.PrintLatte (Print, printTree)
+import IrTransformation.NamesChanger (rename)
 import System.Environment (getArgs)
 import System.Exit (exitFailure)
 import System.FilePath (replaceExtension)
@@ -56,7 +58,15 @@ main = do
     [fileName] -> compile fileName
     _ -> putStrLn "Usage: ./latc <lat file path>"
 
--- placeholders
+-- under construction
 
 genFun :: Program -> FilePath -> IO ()
-genFun _ _ = pure ()
+genFun program _ = do
+  showTree "At the begining" program
+  let renamedProgram = rename program
+  showTree "With varibales renamed" renamedProgram
+  pure ()
+
+showTree :: (Print a) => String -> a -> IO ()
+showTree title tree = do
+  putStrLn $ "\n[" ++ title ++ "]\n\n" ++ printTree tree
