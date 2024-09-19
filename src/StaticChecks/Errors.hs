@@ -67,9 +67,9 @@ instance Show SemanticError where
   show (WrongMainCall pos) =
     "SEMANTIC ERROR: Wrong main call" ++ showPos pos
   show (ExpectedArrType pos) =
-    "SEMANTIC ERROR: Expected array type" ++ showPos pos
+    "SEMANTIC ERROR: Expected array type (cannot be null)" ++ showPos pos
   show (ExpectedClassType pos) =
-    "SEMANTIC ERROR: Expected class type" ++ showPos pos
+    "SEMANTIC ERROR: Expected class type (cannot be null)" ++ showPos pos
   show (PropertyNotExisting (Ident name) pos) =
       "SEMANTIC ERROR: Property '" ++ name ++ "' not existing" ++ showPos pos
   show (InheritanceCycle (Ident name) _) =

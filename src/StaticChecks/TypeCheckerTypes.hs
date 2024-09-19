@@ -203,6 +203,13 @@ addExpRetType t = do
   _ <- checkTypeReturnValidity t (hasPosition t)
   env <- ask
   pure $ env {expRetType = Just t}
+  
+getExpRetType :: TypeCheckerM' Type
+getExpRetType = do
+  maybeType <- asks expRetType
+  case maybeType of
+    Just t -> pure t
+    _ -> undefined -- should never happen
 
 addExpItemType :: Type -> TypeCheckerM' Env
 addExpItemType t = do

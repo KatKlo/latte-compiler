@@ -106,8 +106,8 @@ checkStmtsListType ((Decl _ t items) : xs) = do
   local (const updatedEnv) (checkStmtsListType xs)
   
 checkStmtsListType (x : xs) = do
-  evaluated <- checkStmtType x
   alreadyEvaluated <- asks retType
+  evaluated <- checkStmtType x
   env <- case (alreadyEvaluated, evaluated) of
     (Just _, _) -> printWarning (StmtsNeverReached (hasPosition x)) >> ask
     (Nothing, Just t) -> addRetType t
@@ -153,10 +153,10 @@ checkStmtType (Decr pos itemExpr) = do
   pure Nothing
 
 checkStmtType (Ret _ expr) = do
-  Just t <- asks expRetType
+  t <- getExpRetType
   getCheckExprType expr t
 checkStmtType (VRet pos) = do
-  Just t <- asks expRetType
+  t <- getExpRetType
   compareCastingEvalType tVoid t (WrongReturnType pos)
 
 checkStmtType (Cond pos expr s1) = checkStmtType (CondElse pos expr s1 (Empty pos))
@@ -191,6 +191,7 @@ checkStmtType (ForEach pos t elIdent arrExpr stmt) = do
     _ -> checkBlockType (SBlock (hasPosition stmt) [elStmt, stmt])
   pure Nothing
 
+checkStmtType (SExp _ (EApp _ (Ident "error") _)) = asks expRetType
 checkStmtType (SExp _ expr) = getExprType expr >> pure Nothing
 
 -- 'Expr' level checks
@@ -231,10 +232,13 @@ getExprType (EFieldGet pos itemExpr ident) = do
   case (itemType, ident) of
     (Arr _ _, Ident "length") -> pure tInt
     (Class _ cIdent, _) -> getFieldType cIdent ident pos
-    _ -> throwError $ UnknownSemanticError pos
+    _ -> throwError $ ExpectedClassType (hasPosition itemExpr)
 
 getExprType (EMethod pos itemExpr methodIdent exprs) = do
-  (Class _ classIdent) <- getExprType itemExpr
+  itemType <- getExprType itemExpr
+  classIdent <- case itemType of
+    Class _ ident -> pure ident
+    _ -> throwError $ ExpectedClassType (hasPosition itemExpr)
   Fun _ t args <- getMethodType classIdent methodIdent pos
   resolveAppArgs pos args exprs
   pure t
@@ -275,8 +279,8 @@ getExprType (ERel pos e1 op e2) = do
     relType (NE _) = isEqType
     relType _ = isOrdType
 
+getExprType (EApp pos (Ident "main") _) = throwError $ WrongMainCall pos
 getExprType (EApp pos ident exprs) = do
-  when (ident == Ident "main") (throwError $ WrongMainCall pos)
   Fun _ t args <- getFunctionType ident pos
   resolveAppArgs pos args exprs
   pure t
