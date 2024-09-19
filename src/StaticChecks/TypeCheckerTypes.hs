@@ -273,8 +273,14 @@ mergeParentClass cIdent pIdent = do
   mapM_ (\(i, Declaration t p) -> addFunctionToClass i t p cIdent) (M.toList (functions store M.! pIdent))
   mapM_ (\(i, Declaration t p) -> addFieldToClass i t p cIdent) (M.toList (fields store M.! pIdent))
 
+-- comparing types
 
--- miscellaneous
+compareCastingBothWays :: Type -> Type -> TypeCheckerM' (Maybe Type)
+compareCastingBothWays t1 t2 = do
+  maybeRes1 <- compareAndGetTypes t1 t2
+  case maybeRes1 of
+    Just _ -> pure maybeRes1
+    _ -> compareAndGetTypes t2 t1
 
 compareCastingEvalType :: Type -> Type -> SemanticError -> TypeCheckerM' (Maybe Type)
 compareCastingEvalType expType evalType err = do
@@ -308,12 +314,7 @@ compareClassTypes expIdent evalIdent
       Just pIdent -> compareClassTypes expIdent pIdent
       _ -> pure False
 
-compareCastingBothWays :: Type -> Type -> TypeCheckerM' (Maybe Type)
-compareCastingBothWays t1 t2 = do
-  maybeRes1 <- compareAndGetTypes t1 t2
-  case maybeRes1 of
-    Just _ -> pure maybeRes1
-    _ -> compareAndGetTypes t2 t1
+-- miscellaneous
 
 checkTypeReturnValidity :: Type -> BNFC'Position -> TypeCheckerM' ()
 checkTypeReturnValidity (Void _) _ = pure ()

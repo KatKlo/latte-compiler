@@ -30,7 +30,6 @@ data SemanticError' a
   | OperationImpossible a
   | DiffOperandTypes Type Type a
   | NotAllowedOutsideClass a
-  | CustomError String a
   | UnknownSemanticError a
 
 instance Show SemanticError where
@@ -80,8 +79,6 @@ instance Show SemanticError where
     "SEMANTIC ERROR: Different types of operands (" ++ show t1 ++ ", " ++ show t2 ++ ")" ++ showPos pos
   show (NotAllowedOutsideClass pos) =
     "SEMANTIC ERROR: Operation not allowed outside of a class definition" ++ showPos pos
-  show (CustomError s _) =
-    "SEMANTIC ERROR: Custom error: " ++ s
   show (UnknownSemanticError pos) =
     "SEMANTIC ERROR: Unknown type check error" ++ showPos pos
 
