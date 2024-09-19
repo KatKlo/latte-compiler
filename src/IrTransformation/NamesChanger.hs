@@ -4,6 +4,7 @@ import Control.Monad.Identity
 import Control.Monad.Reader
 import Control.Monad.State
 import Control.Monad
+import Data.Functor
 import qualified Data.Map as M
 import Data.Maybe
 import Grammar.AbsLatte
@@ -58,6 +59,14 @@ renameStmts ((Decl pos t items) : stmts) = do
   (newItems, newEnv) <- renameItems items
   newStmts <- local (const newEnv) (renameStmts stmts)
   pure $ Decl pos t newItems : newStmts
+renameStmts ((ForEach pos t ident expr stmt) : stmts) = do
+  env <- ask
+  newExpr <- renameExpr expr
+  newEnv <- addToEnv ident env
+  let newIdent = fromMaybe undefined (M.lookup ident newEnv)
+  newStmt <- local (const newEnv) (renameStmt stmt)
+  newStmts <- renameStmts stmts
+  pure $ ForEach pos t newIdent newExpr newStmt : newStmts
 renameStmts (stmt : stmts) = do
   newStmt <- renameStmt stmt
   newStmts <- renameStmts stmts
@@ -139,9 +148,17 @@ resolveIdent ident = do
 
 renameExpr :: Expr -> RenamerM' Expr
 renameExpr (EVar pos ident) = EVar pos <$> resolveIdent ident
-renameExpr expr@EArrGet {} = pure expr -- todo
-renameExpr expr@EFieldGet {} = pure expr -- todo
-renameExpr expr@EMethod {} = pure expr -- todo
+renameExpr (EArrGet pos arrExpr idExpr) = do
+  newArrExpr <- renameExpr arrExpr
+  newIdExpr <- renameExpr idExpr
+  return $ EArrGet pos newArrExpr newIdExpr
+renameExpr (EFieldGet pos itemExpr ident) = do
+  newItemExpr <- renameExpr itemExpr
+  return $ EFieldGet pos newItemExpr ident -- todo: do something about field ident
+renameExpr (EMethod pos itemExpr methodIdent exprs) = do
+  newItemExpr <- renameExpr itemExpr
+  newExprs <- mapM renameExpr exprs
+  return $ EMethod pos newItemExpr methodIdent newExprs -- todo: do something about method ident
 renameExpr (EApp pos ident exprs) = do
   newExprs <- mapM renameExpr exprs
   return $ EApp pos ident newExprs
