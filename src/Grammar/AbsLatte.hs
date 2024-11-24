@@ -23,26 +23,11 @@ data Program' a = Prog a [TopDef' a]
   deriving (C.Eq, C.Ord, C.Show, C.Read, C.Functor, C.Foldable, C.Traversable)
 
 type TopDef = TopDef' BNFC'Position
-data TopDef' a
-    = FnTopDef a (FnDef' a) | ClassTopDef a (ClassDef' a)
-  deriving (C.Eq, C.Ord, C.Show, C.Read, C.Functor, C.Foldable, C.Traversable)
-
-type ClassDef = ClassDef' BNFC'Position
-data ClassDef' a
-    = ClassFinDef a Ident [CStmt' a]
-    | ClassExtDef a Ident Ident [CStmt' a]
-  deriving (C.Eq, C.Ord, C.Show, C.Read, C.Functor, C.Foldable, C.Traversable)
-
-type CStmt = CStmt' BNFC'Position
-data CStmt' a = MethodDef a (FnDef' a) | FieldDef a (Type' a) Ident
-  deriving (C.Eq, C.Ord, C.Show, C.Read, C.Functor, C.Foldable, C.Traversable)
-
-type FnDef = FnDef' BNFC'Position
-data FnDef' a = FunDef a (Type' a) Ident [Arg' a] (Block' a)
+data TopDef' a = FnDef a (Type' a) Ident [Arg' a] (Block' a)
   deriving (C.Eq, C.Ord, C.Show, C.Read, C.Functor, C.Foldable, C.Traversable)
 
 type Arg = Arg' BNFC'Position
-data Arg' a = FunArg a (Type' a) Ident
+data Arg' a = FnArg a (Type' a) Ident
   deriving (C.Eq, C.Ord, C.Show, C.Read, C.Functor, C.Foldable, C.Traversable)
 
 type Block = Block' BNFC'Position
@@ -77,7 +62,6 @@ data Type' a
     | Bool a
     | Void a
     | Arr a (Type' a)
-    | Class a Ident
     | Fun a (Type' a) [Type' a]
     | Ref a (Type' a)
   deriving (C.Eq, C.Ord, C.Show, C.Read, C.Functor, C.Foldable, C.Traversable)
@@ -85,20 +69,16 @@ data Type' a
 type Expr = Expr' BNFC'Position
 data Expr' a
     = EVar a Ident
-    | ESelf a
     | ELitInt a Integer
     | ELitTrue a
     | ELitFalse a
     | EString a String
     | ENull a
     | EArrGet a (Expr' a) (Expr' a)
-    | EFieldGet a (Expr' a) Ident
-    | EMethod a (Expr' a) Ident [Expr' a]
+    | EArrLen a (Expr' a)
     | EApp a Ident [Expr' a]
-    | EClassNull a Ident
     | EArrNull a (Type' a)
     | ENewArr a (Type' a) (Expr' a)
-    | ENewObj a (Type' a)
     | Neg a (Expr' a)
     | Not a (Expr' a)
     | EMul a (Expr' a) (MulOp' a) (Expr' a)
@@ -144,26 +124,11 @@ instance HasPosition Program where
 
 instance HasPosition TopDef where
   hasPosition = \case
-    FnTopDef p _ -> p
-    ClassTopDef p _ -> p
-
-instance HasPosition ClassDef where
-  hasPosition = \case
-    ClassFinDef p _ _ -> p
-    ClassExtDef p _ _ _ -> p
-
-instance HasPosition CStmt where
-  hasPosition = \case
-    MethodDef p _ -> p
-    FieldDef p _ _ -> p
-
-instance HasPosition FnDef where
-  hasPosition = \case
-    FunDef p _ _ _ _ -> p
+    FnDef p _ _ _ _ -> p
 
 instance HasPosition Arg where
   hasPosition = \case
-    FunArg p _ _ -> p
+    FnArg p _ _ -> p
 
 instance HasPosition Block where
   hasPosition = \case
@@ -197,27 +162,22 @@ instance HasPosition Type where
     Bool p -> p
     Void p -> p
     Arr p _ -> p
-    Class p _ -> p
     Fun p _ _ -> p
     Ref p _ -> p
 
 instance HasPosition Expr where
   hasPosition = \case
     EVar p _ -> p
-    ESelf p -> p
     ELitInt p _ -> p
     ELitTrue p -> p
     ELitFalse p -> p
     EString p _ -> p
     ENull p -> p
     EArrGet p _ _ -> p
-    EFieldGet p _ _ -> p
-    EMethod p _ _ _ -> p
+    EArrLen p _ -> p
     EApp p _ _ -> p
-    EClassNull p _ -> p
     EArrNull p _ -> p
     ENewArr p _ _ -> p
-    ENewObj p _ -> p
     Neg p _ -> p
     Not p _ -> p
     EMul p _ _ _ -> p

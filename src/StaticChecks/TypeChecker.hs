@@ -25,9 +25,7 @@ typeCheck prog = runExceptT (runReaderT (evalStateT (execWriterT (checkProgram p
 
 checkProgram :: Program -> TypeCheckerM' ()
 checkProgram (Prog _ topDefs) = do
-  mapM_ saveClassAsNewType topDefs
   mapM_ saveTopDef topDefs
-  resolveClassesInheritances
   checkMainDeclaration
   mapM_ checkTopDef topDefs
 
@@ -37,57 +35,23 @@ checkMainDeclaration = do
   case mainType of
     Fun _ (Int _) [] -> pure ()
     Fun pos _ _ -> throwError $ WrongMainDeclaration pos
-    _ -> throwError $ UnknownSemanticError BNFC'NoPosition
+    _ -> undefined  -- should never happen
 
 -- 'TopDef' level checks
 
-saveClassAsNewType :: TopDef -> TypeCheckerM' ()
-saveClassAsNewType (ClassTopDef _ classDef) = addNewClassDef (className classDef)
-saveClassAsNewType _ = pure ()
-
 saveTopDef :: TopDef -> TypeCheckerM' ()
-saveTopDef (FnTopDef _ fnDef) = saveFnDef fnDef
-saveTopDef (ClassTopDef _ classDef) = saveClassDef classDef
-
-saveFnDef :: FnDef -> TypeCheckerM' ()
-saveFnDef (FunDef pos t ident args _) = do
+saveTopDef (FnDef pos t ident args _) = do
   let mappedArgs = map argType args
   addFunction ident (Fun pos t mappedArgs) pos
 
-saveClassDef :: ClassDef -> TypeCheckerM' ()
-saveClassDef cls = do
-  let cIdent = className cls
-  _ <- addClassParent cIdent (classParent cls) (hasPosition cls)
-  newEnv <- setCurrClass cIdent
-  local (const newEnv) (mapM_ saveCStmt (classBody cls))
-
 checkTopDef :: TopDef -> TypeCheckerM' ()
-checkTopDef (FnTopDef _ fnDef) = checkFnDef fnDef
-checkTopDef (ClassTopDef _ classDef) = checkClassDef classDef
-
-checkFnDef :: FnDef -> TypeCheckerM' ()
-checkFnDef (FunDef pos t ident args (SBlock _ stmts)) = do
+checkTopDef (FnDef pos t ident args (SBlock _ stmts)) = do
   newEnv <- addExpRetType t
-  blockEnv <- foldM resolveDefArg newEnv args
+  blockEnv <- foldM resolveFnArg newEnv args
   evaluated <- local (const blockEnv) (checkStmtsListType stmts)
   case evaluated of
     Just _ -> pure ()
-    Nothing -> compareCastingEvalType tVoid t (NoReturnStmt ident pos) >> pure ()
-
-checkClassDef :: ClassDef -> TypeCheckerM' ()
-checkClassDef cls = do
-  newEnv <- setCurrClass (className cls)
-  local (const newEnv) (mapM_ checkCStmt (classBody cls))
-
--- 'CStmt' level checks
-
-saveCStmt :: CStmt -> TypeCheckerM' ()
-saveCStmt (MethodDef _ fnDef) = saveFnDef fnDef
-saveCStmt (FieldDef pos fieldType fieldIdent) = addField fieldIdent fieldType pos
-
-checkCStmt :: CStmt -> TypeCheckerM' ()
-checkCStmt (MethodDef _ fnDef) = checkFnDef fnDef
-checkCStmt _ = pure ()
+    Nothing -> compareTypes tVoid t (MissingReturnStmt ident pos) >> pure ()
 
 -- 'Block' level checks
 
@@ -152,12 +116,14 @@ checkStmtType (Decr pos itemExpr) = do
   _ <- checkExprMutability itemExpr pos
   pure Nothing
 
-checkStmtType (Ret _ expr) = do
+checkStmtType (Ret pos expr) = do
   t <- getExpRetType
-  getCheckExprType expr t
+  case t of
+    (Void _) -> throwError $ ExpectedVRet pos
+    _ -> getCheckExprType expr t
 checkStmtType (VRet pos) = do
   t <- getExpRetType
-  compareCastingEvalType tVoid t (WrongReturnType pos)
+  compareTypes tVoid t (ReturnValueExpected pos)
 
 checkStmtType (Cond pos expr s1) = checkStmtType (CondElse pos expr s1 (Empty pos))
 checkStmtType (CondElse _ expr s1 s2) = do
@@ -183,7 +149,7 @@ checkStmtType (While pos expr stmt) = do
 checkStmtType (ForEach pos t elIdent arrExpr stmt) = do
   evaluatedArrExpr <- getExprType arrExpr
   _ <- case evaluatedArrExpr of
-    Arr _ elType -> compareCastingEvalType t elType (WrongVariableType (hasPosition t))
+    Arr _ elType -> compareTypes t elType (WrongVariableType (hasPosition t))
     _ -> throwError $ ExpectedArrType (hasPosition arrExpr)
   let elStmt = Decl pos t [NoInit pos elIdent]
   _ <- case stmt of
@@ -199,15 +165,11 @@ checkStmtType (SExp _ expr) = getExprType expr >> pure Nothing
 getExprType :: Expr -> TypeCheckerM' Type
 
 getExprType (EVar pos ident) = getVariableType ident pos
-getExprType (ESelf pos) = do
-  cIdent <- getCheckCurrClass pos
-  pure $ Class pos cIdent
 
 getExprType (ELitInt pos num) = if isInt num then pure tInt else throwError $ IntOutOfBound num pos
 getExprType (ELitTrue _) = pure tBool
 getExprType (ELitFalse _) = pure tBool
 getExprType (EString _ _) = pure tStr
-getExprType (EClassNull pos ident) = checkClassValidity ident pos >> pure (Ref pos (Class pos ident))
 getExprType (EArrNull pos t) = checkTypeValidity t pos >> pure (Ref pos t)
 getExprType (ENull pos) = pure $ Ref pos tVoid
 
@@ -216,32 +178,17 @@ getExprType (ENewArr pos t expr) = do
   _ <- getCheckExprType expr tInt
   pure $ Arr pos t
 
-getExprType (ENewObj pos t@(Class _ _)) = do
-  _ <- checkTypeValidity t pos
-  pure t
-getExprType (ENewObj pos _) = throwError $ ExpectedClassType pos
-
 getExprType (EArrGet pos arrExpr idExpr) = do
   _ <- getCheckExprType idExpr tInt
   arrType <- getExprType arrExpr
   case arrType of
     (Arr _ t) -> pure t
     _ -> throwError $ ExpectedArrType pos
-getExprType (EFieldGet pos itemExpr ident) = do
-  itemType <- getExprType itemExpr
-  case (itemType, ident) of
-    (Arr _ _, Ident "length") -> pure tInt
-    (Class _ cIdent, _) -> getFieldType cIdent ident pos
-    _ -> throwError $ ExpectedClassType (hasPosition itemExpr)
-
-getExprType (EMethod pos itemExpr methodIdent exprs) = do
-  itemType <- getExprType itemExpr
-  classIdent <- case itemType of
-    Class _ ident -> pure ident
-    _ -> throwError $ ExpectedClassType (hasPosition itemExpr)
-  Fun _ t args <- getMethodType classIdent methodIdent pos
-  resolveAppArgs pos args exprs
-  pure t
+getExprType (EArrLen pos arrExpr) = do
+  arrType <- getExprType arrExpr
+  case arrType of
+    Arr _ _ -> pure tInt
+    _ -> throwError $ ExpectedArrType pos
 
 getExprType (Neg pos (ELitInt _ num)) = getExprType (ELitInt pos (- num))
 getExprType (Neg _ expr) = getCheckExprType expr tInt <&> fromJust
@@ -260,18 +207,18 @@ getExprType (EMul _ e1 op e2) = do
   pure tInt
 
 getExprType (EAdd _ e1 (Minus _) e2) = getCheckExprType e1 tInt >> getCheckExprType e2 tInt <&> fromJust
-getExprType (EAdd _ e1 _ e2) = do
+getExprType (EAdd pos e1 _ e2) = do
   t1 <- getExprType e1
   if isAddType t1
     then getCheckExprType e2 t1 <&> fromJust
-    else throwError $ WrongExpressionType (hasPosition e1)
+    else throwError $ CannotMakeOpOnType "add" t1 pos
 
 getExprType (ERel pos e1 op e2) = do
   t1 <- getExprType e1
   t2 <- getExprType e2
-  maybeFinalType <- compareCastingBothWays t1 t2
+  maybeFinalType <- compareAndGetTypes t1 t2
   case maybeFinalType of
-    Just t -> if relType op t then pure tBool else throwError $ WrongExpressionType (hasPosition e1)
+    Just t -> if relType op t then pure tBool else throwError $ CannotMakeOpOnType "comparison" t pos
     Nothing -> throwError $ DiffOperandTypes t1 t2 pos
   where
     relType :: RelOp -> Type -> Bool
@@ -279,7 +226,7 @@ getExprType (ERel pos e1 op e2) = do
     relType (NE _) = isEqType
     relType _ = isOrdType
 
-getExprType (EApp pos (Ident "main") _) = throwError $ WrongMainCall pos
+getExprType (EApp pos (Ident "main") _) = throwError $ MainCallNotAllowed pos
 getExprType (EApp pos ident exprs) = do
   Fun _ t args <- getFunctionType ident pos
   resolveAppArgs pos args exprs
@@ -292,24 +239,17 @@ resolveAppArgs _ [] [] = pure ()
 resolveAppArgs pos (t : xs) (expr : ys) = getCheckExprType expr t >> resolveAppArgs pos xs ys
 resolveAppArgs pos _ _ = throwError $ WrongNumberOfArgs pos
 
-resolveDefArg :: Env -> Arg -> TypeCheckerM' Env
-resolveDefArg env (FunArg pos t ident) = addVariableToScope ident t pos env
+resolveFnArg :: Env -> Arg -> TypeCheckerM' Env
+resolveFnArg env (FnArg pos t ident) = addVariableToScope ident t pos env
 
 getCheckExprType :: Expr -> Type -> TypeCheckerM' (Maybe Type)
-getCheckExprType expr (Void _) = throwError $ WrongExpressionType (hasPosition expr)
 getCheckExprType expr expected = do
   evaluated <- getExprType expr
-  compareCastingEvalType expected evaluated (WrongExpressionType (hasPosition expr))
+  compareTypes expected evaluated (WrongExpressionType expected evaluated (hasPosition expr))
 
 checkExprMutability :: Expr -> BNFC'Position -> TypeCheckerM' ()
 checkExprMutability EVar {} _ = pure ()
 checkExprMutability EArrGet {} _ = pure ()
-checkExprMutability (EFieldGet _ itemExpr (Ident "length")) pos = do
-  itemType <- getExprType itemExpr
-  case itemType of
-   (Arr _ _) -> throwError $ OperationImpossible pos
-   _ -> pure ()
-checkExprMutability EFieldGet {} _ = pure ()
 checkExprMutability _ pos = throwError $ OperationImpossible pos
 
 -- helpers

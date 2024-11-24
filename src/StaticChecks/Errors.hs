@@ -3,6 +3,8 @@
 module StaticChecks.Errors where
 
 import Grammar.AbsLatte
+import Data.List (intercalate)
+import StaticChecks.GrammarUtils
 
 type SemanticError = SemanticError' BNFC'Position
 
@@ -10,75 +12,60 @@ data SemanticError' a
   = WrongMainDeclaration a
   | RedeclarationInScope Ident a a
   | BuiltInRedeclaration Ident a
-  | NoReturnStmt Ident a
+  | MissingReturnStmt Ident a
   | VoidNotAllowed a
-  | ClassNotDefined Ident a
-  | ClassRedefined Ident a
   | IntOutOfBound Integer a
-  | WrongExpressionType a
+  | WrongExpressionType Type Type a
   | VariableNotDefined Ident a
   | FunctionNotDefined Ident a
-  | MethodNotDefined Ident Ident a
   | WrongNumberOfArgs a
   | WrongVariableType a
-  | WrongReturnType a
-  | WrongMainCall a
+  | ReturnValueExpected a
+  | ExpectedVRet a
+  | MainCallNotAllowed a
   | ExpectedArrType a
-  | ExpectedClassType a
-  | PropertyNotExisting Ident a
-  | InheritanceCycle Ident a
   | OperationImpossible a
   | DiffOperandTypes Type Type a
-  | NotAllowedOutsideClass a
+  | CannotMakeOpOnType String Type a
   | UnknownSemanticError a
 
 instance Show SemanticError where
   show (WrongMainDeclaration pos) =
-    "SEMANTIC ERROR: Wrong main declaration" ++ showPos pos
+    "SEMANTIC ERROR: Wrong main declaration" ++ showPos pos ++ " expected type: " ++ showType tMainFn
   show (RedeclarationInScope (Ident name) pos1 pos2) =
     "SEMANTIC ERROR: " ++ name ++ " defined" ++ showPos (min pos1 pos2) ++ " and redefined" ++ showPos (max pos1 pos2)
   show (BuiltInRedeclaration (Ident name) pos) =
     "SEMANTIC ERROR: Built-in function '" ++ name ++ "' redefined" ++ showPos pos
-  show (NoReturnStmt (Ident name) pos) =
+  show (MissingReturnStmt (Ident name) pos) =
     "SEMANTIC ERROR: No return statement in function '" ++ name ++ "' defined" ++ showPos pos
   show (VoidNotAllowed pos) =
-    "SEMANTIC ERROR: Void usage not allowed" ++ showPos pos
-  show (ClassNotDefined (Ident ident) pos) =
-    "SEMANTIC ERROR: Class '" ++ ident ++ "' not defined" ++ showPos pos
-  show (ClassRedefined (Ident ident) _) =
-    "SEMANTIC ERROR: Class '" ++ ident ++ "' defined multiple times"
+    "SEMANTIC ERROR" ++ showPos pos ++ ": Void usage not allowed"
   show (IntOutOfBound num pos) =
-    "SEMANTIC ERROR: Integer " ++ show num ++ " out of bound" ++ showPos pos
-  show (WrongExpressionType pos) =
-    "SEMANTIC ERROR: Wrong expression type" ++ showPos pos
+    "SEMANTIC ERROR" ++ showPos pos ++ ": Integer " ++ show num ++ " out of bound"
+  show (WrongExpressionType ex ev pos) =
+    "SEMANTIC ERROR: Wrong expression type (expected: " ++ showType ex ++ "; got: " ++ showType ev ++ ")" ++ showPos pos
   show (VariableNotDefined (Ident name) pos) =
-    "SEMANTIC ERROR: Variable '" ++ name ++ "' not defined" ++ showPos pos
+    "SEMANTIC ERROR" ++ showPos pos ++ ": Variable '" ++ name ++ "' not defined"
   show (FunctionNotDefined (Ident name) pos) =
-    "SEMANTIC ERROR: Function '" ++ name ++ "' not defined" ++ showPos pos
-  show (MethodNotDefined (Ident cName) (Ident fnName) pos) =
-    "SEMANTIC ERROR: Method '" ++ fnName ++ "' in class '" ++ cName ++ "' not defined" ++ showPos pos
+    "SEMANTIC ERROR" ++ showPos pos ++ ": Function '" ++ name ++ "' not defined"
   show (WrongNumberOfArgs pos) =
     "SEMANTIC ERROR: Wrong number of arguments" ++ showPos pos
   show (WrongVariableType pos) =
     "SEMANTIC ERROR: Wrong variable type" ++ showPos pos
-  show (WrongReturnType pos) =
-    "SEMANTIC ERROR: Wrong return type" ++ showPos pos
-  show (WrongMainCall pos) =
-    "SEMANTIC ERROR: Wrong main call" ++ showPos pos
+  show (ReturnValueExpected pos) =
+    "SEMANTIC ERROR: Expected value to return" ++ showPos pos
+  show (ExpectedVRet pos) =
+    "SEMANTIC ERROR: No value is expected to be returned" ++ showPos pos
+  show (MainCallNotAllowed pos) =
+    "SEMANTIC ERROR" ++ showPos pos ++ ": Explicit main call is not allowed"
   show (ExpectedArrType pos) =
-    "SEMANTIC ERROR: Expected array type (cannot be null)" ++ showPos pos
-  show (ExpectedClassType pos) =
-    "SEMANTIC ERROR: Expected class type (cannot be null)" ++ showPos pos
-  show (PropertyNotExisting (Ident name) pos) =
-      "SEMANTIC ERROR: Property '" ++ name ++ "' not existing" ++ showPos pos
-  show (InheritanceCycle (Ident name) _) =
-      "SEMANTIC ERROR: Classes inheritance cycle with '" ++ name ++ "'"
+    "SEMANTIC ERROR" ++ showPos pos ++ ": Expected array type (cannot be null)"
   show (OperationImpossible pos) =
     "SEMANTIC ERROR: Cannot execute operation" ++ showPos pos
   show (DiffOperandTypes t1 t2 pos) =
-    "SEMANTIC ERROR: Different types of operands (" ++ show t1 ++ ", " ++ show t2 ++ ")" ++ showPos pos
-  show (NotAllowedOutsideClass pos) =
-    "SEMANTIC ERROR: Operation not allowed outside of a class definition" ++ showPos pos
+    "SEMANTIC ERROR: Different types of operands (" ++ showType t1 ++ ", " ++ showType t2 ++ ")" ++ showPos pos
+  show (CannotMakeOpOnType op t pos) =
+    "SEMANTIC ERROR" ++ showPos pos ++ ": Cannot make " ++ op ++ " operation on " ++ showType t
   show (UnknownSemanticError pos) =
     "SEMANTIC ERROR: Unknown type check error" ++ showPos pos
 
@@ -106,3 +93,13 @@ instance Show SemanticException where
 showPos :: BNFC'Position -> String
 showPos (Just (line, column)) = concat [" at line ", show line, ", column ", show column]
 showPos _ = ""
+
+showType :: Type -> String
+showType Int {} = "integer"
+showType Str {} = "string"
+showType Bool {} = "boolean"
+showType Void {} = "void"
+showType (Arr _ t) = showType t ++ "[]"
+showType (Fun _ t args) = "fn (" ++ (intercalate ", " (map showType args)) ++ ") -> " ++ showType t
+showType (Ref _ (Void _)) = "null"
+showType (Ref _  t) = "(" ++ showType t ++ ")null"

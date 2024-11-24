@@ -1,6 +1,6 @@
 GHC        = ghc
 
-COMPILER_NAME = latc_x86_64
+COMPILER_NAME = latc
 COMPILER_SOURCE = Main.hs
 
 .PHONY : all clean cleanDist

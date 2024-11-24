@@ -2,31 +2,13 @@
 
 entrypoints Program ;
 
-Prog.          Program ::= [TopDef] ;
+Prog.      Program ::= [TopDef] ;
 
-FnTopDef.      TopDef ::= FnDef ;
-
-ClassTopDef.   TopDef ::= ClassDef ;
+FnDef.	   TopDef ::= Type Ident "(" [Arg] ")" Block ;
 
 separator nonempty TopDef "" ;
 
--- class decl ----
-
-ClassFinDef.   ClassDef ::= "class" Ident "{" [CStmt] "}" ;
-
-ClassExtDef.   ClassDef ::= "class" Ident "extends" Ident "{" [CStmt] "}" ;
-
-MethodDef.     CStmt ::= FnDef ;
-
-FieldDef.      CStmt ::= Type Ident ";" ;
-
-separator CStmt "" ;
-
--- function decl ------------------------------------------
-
-FunDef.	   FnDef ::= Type Ident "(" [Arg] ")" Block ;
-
-FunArg.    Arg ::= Type Ident ;
+FnArg. 	   Arg ::= Type Ident;
 
 separator  Arg "," ;
 
@@ -80,8 +62,6 @@ Void.      Type1 ::= "void" ;
 
 Arr.       Type2 ::= Type "[]" ;
 
-Class.     Type1 ::= Ident ;
-
 _.         Type ::= Type1 ;
 
 _.         Type ::= Type2 ;
@@ -96,8 +76,6 @@ separator  Type "," ;
 
 EVar.      Expr7 ::= Ident ;
 
-ESelf.     Expr7 ::= "self" ;
-
 ELitInt.   Expr7 ::= Integer ;
 
 ELitTrue.  Expr7 ::= "true" ;
@@ -110,19 +88,13 @@ ENull.     Expr7 ::= "null" ;
 
 EArrGet.   Expr7 ::= Expr6 "[" Expr "]" ;
 
-EFieldGet. Expr7 ::= Expr6 "." Ident ;
-
-EMethod.   Expr7 ::= Expr6 "." Ident "(" [Expr] ")" ;
+EArrLen.   Expr7 ::= Expr6 "." "length" ;
 
 EApp.      Expr7 ::= Ident "(" [Expr] ")" ;
-
-EClassNull. Expr6 ::= "(" Ident ")" "null" ;
 
 EArrNull.  Expr6::= "(" Type2 ")" "null" ;
 
 ENewArr.   Expr6 ::= "new" Type "[" Expr "]" ;
-
-ENewObj.   Expr6 ::= "new" Type ;
 
 Neg.       Expr5 ::= "-" Expr6 ;
 

@@ -16,22 +16,13 @@ tBool = Bool BNFC'NoPosition
 tVoid :: Type
 tVoid = Void BNFC'NoPosition
 
+tMainFn :: Type
+tMainFn = Fun BNFC'NoPosition tInt []
+
 -- types mappers
 
 argType :: Arg -> Type
-argType (FunArg _ t _) = t
-
-className :: ClassDef -> Ident
-className (ClassFinDef _ ident _) = ident
-className (ClassExtDef _ ident _ _) = ident
-
-classParent :: ClassDef -> Maybe Ident
-classParent (ClassExtDef _ _ pIdent _) = Just pIdent
-classParent _ = Nothing
-
-classBody :: ClassDef -> [CStmt]
-classBody (ClassFinDef _ _ body) = body
-classBody (ClassExtDef _ _ _ body) = body
+argType (FnArg _ t _) = t
 
 -- types checks
 
@@ -52,7 +43,6 @@ isAddType (Str _) = True
 isAddType _ = False
 
 isRefType :: Type -> Bool
-isRefType Class {} = True
 isRefType Arr {} = True
 isRefType Ref {} = True
 isRefType _ = False
@@ -65,7 +55,6 @@ basicCompareTypes (Str _) (Str _) = True
 basicCompareTypes (Bool _) (Bool _) = True
 basicCompareTypes (Void _) (Void _) = True
 basicCompareTypes (Arr _ t1) (Arr _ t2) = basicCompareTypes t1 t2
-basicCompareTypes (Class _ s1) (Class _ s2) = s1 == s2
 basicCompareTypes _ _ = False
 
 instantBoolExprValue :: Expr -> Maybe Bool
